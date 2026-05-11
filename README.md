@@ -1,0 +1,52 @@
+# kulun 库仑滴定数据处理与绘图工具
+
+`kulun` 是一个用 Python 编写的命令行工具，专门用于提取、合并并绘制由库仑滴定仪生成的 `.dat` 数据文件。该工具能够快速绘制滴定曲线及一阶导数图，并自动标注突跃点时间间隔。
+
+## 安装
+
+可以通过 pip 快速安装：
+
+```bash
+pip install kulun
+```
+
+## 功能与用法
+
+安装后，您可以在终端中任意位置直接使用 `kulun` 命令。
+
+### 1. 提取数据 (-e / --extract)
+从 `.dat` 文件或文件夹中提取第4和第5列数据为 `.csv` 文件。
+```bash
+kulun -e file1.dat file2.dat
+kulun -e ./data_folder
+```
+
+### 2. 合并数据 (-c / --combine)
+顺序拼接多个 `.csv` 数据文件，自动平移时间轴确保连续。
+```bash
+kulun -c file1.csv file2.csv 
+```
+
+### 3. 一键提取并合并 (-ec)
+```bash
+kulun -ec file1.dat file2.dat
+```
+
+- **注意⚠️：凡是包含 "c" 方法的命令都需要注意传入文件的顺序！**
+
+### 4. 数据绘图 (-p / --plot)
+基于提取的 CSV 文件，自动识别平行曲线、画出滴定和一阶导曲线，分析突跃点并输出高质量科研插图 `.png`。
+```bash
+kulun -p data.csv
+```
+
+### 5. 高阶组合功能
+同时合并并画图：
+```bash
+kulun -cp file1.csv file2.csv
+```
+
+提取、合并并画图：
+```bash
+kulun -ecp file1.dat file2.dat
+```
