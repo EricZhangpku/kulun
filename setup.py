@@ -5,7 +5,7 @@ from setuptools import setup
 long_description = ""
 if os.path.exists("README.md"):
     with open("README.md", "r", encoding="utf-8") as fh:
-        long_description = f.read()
+        long_description = fh.read()
 
 setup(
     name="kulun",  # 包名，你在 pip install 时候的名字
