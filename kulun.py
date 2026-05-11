@@ -5,13 +5,47 @@ import csv
 import argparse
 
 try:
+    from importlib.metadata import version as _get_version
+    __version__ = _get_version("kulun")
+except Exception:
+    __version__ = "unknown"
+
+try:
     import numpy as np
     import matplotlib.pyplot as plt
+    import matplotlib.font_manager as fm
     from scipy.signal import savgol_filter
     from scipy.interpolate import interp1d
     HAS_LIBS = True
 except ImportError:
     HAS_LIBS = False
+
+def _get_songti_fonts():
+    """Return available Chinese 宋体 (Song/serif) fonts on the current system."""
+    candidates = [
+        # Windows
+        'SimSun', 'FangSong', 'KaiTi',
+        # macOS
+        'Songti SC', 'STSong', 'STFangsong',
+        # Linux
+        'Noto Serif CJK SC', 'AR PL UMing CN', 'AR PL UKai CN',
+    ]
+    available = {f.name for f in fm.fontManager.ttflist}
+    return [name for name in candidates if name in available]
+
+
+def _get_heiti_fonts():
+    """Return available Chinese 黑体 (Hei/sans-serif) fonts on the current system."""
+    candidates = [
+        # Windows
+        'SimHei', 'Microsoft YaHei',
+        # macOS
+        'Heiti TC', 'STHeiti', 'PingFang HK',
+        # Linux
+        'Noto Sans CJK SC', 'WenQuanYi Micro Hei', 'WenQuanYi Zen Hei',
+    ]
+    available = {f.name for f in fm.fontManager.ttflist}
+    return [name for name in candidates if name in available]
 
 def process_file_extract(file_path):
     if not file_path.endswith('.dat'):
@@ -120,11 +154,12 @@ def plot_csv(paths):
         print("缺少绘图需要的 numpy, scipy, matplotlib 库，不能绘图。由于您当前环境中可能未安装，请使用如 pip install numpy scipy matplotlib 安装。")
         return
 
-    # 设置中文字体（宋体）和英文字体（Times New Roman），并处理负号显示
-    # macOS 下通常自带 STSong（华文宋体）和 Songti SC，而不一定有 SimSun
-    plt.rcParams['font.sans-serif'] = ['STSong', 'Songti SC', 'SimSun']
-    plt.rcParams['font.serif'] = ['Times New Roman']
-    plt.rcParams['font.family'] = 'serif'
+    # 自动检测系统中可用的中文字体，兼容 Windows / macOS / Linux
+    songti_fonts = _get_songti_fonts()
+    heiti_fonts = _get_heiti_fonts()
+    # 全局默认 sans-serif：拉丁字符用 Arial，中文用黑体
+    plt.rcParams['font.sans-serif'] = ['Arial'] + heiti_fonts + ['sans-serif']
+    plt.rcParams['font.family'] = 'sans-serif'
     plt.rcParams['axes.unicode_minus'] = False
 
     for path in paths:
@@ -215,19 +250,19 @@ def plot_csv(paths):
                 
                 # 在投影线横轴下方写字（去掉s，放到横轴下面）
                 ax1.text(t_jump, -0.015, f'{t_jump:.1f}', color='black', transform=ax1.get_xaxis_transform(),
-                         ha='center', va='top', rotation=90, fontsize=10, clip_on=False)
+                         ha='center', va='top', rotation=90, fontsize=10, fontfamily='Arial', clip_on=False)
 
             last_t = t_seg[-1]
             last_E = e_smooth[-1]
 
         ax1.set_xlabel('$t$ / s', fontname='Arial')
         ax1.set_ylabel('$E$ / mV', color='b', fontname='Arial')
-        ax2.set_ylabel('d$E$/d$t$ / (mV/s)', color='r', fontname='Arial')
+        ax2.set_ylabel('d$E$/d$t$ / mV$\cdot$s$^{-1}$', color='r', fontname='Arial')
         
         ax1.tick_params(axis='y', labelcolor='b')
         ax2.tick_params(axis='y', labelcolor='r')
         
-        plt.title(f"Coulomb Titration Curve ({os.path.basename(path)})", fontfamily=['Times New Roman', 'Songti SC', 'SimSun'])
+        plt.title(f"Coulomb Titration Curve ({os.path.basename(path)})", fontfamily=['Arial'] + heiti_fonts)
         
         # 将突跃点间隔放在图像底部左侧，不分行
         if len(jump_points) > 1:
@@ -243,7 +278,8 @@ def plot_csv(paths):
             fig.tight_layout(rect=[0, bottom_margin, 1, 1])
             
             # 添加文字到整张图片的底部靠左，紧贴图形区域
-            fig.text(0.06, bottom_margin - 0.04, info_str, ha='left', va='bottom', fontsize=11, fontfamily=['Songti SC', 'SimSun'])
+            fig.text(0.06, bottom_margin - 0.04, info_str, ha='left', va='bottom', fontsize=11,
+                 fontfamily=['Times New Roman'] + songti_fonts)
         else:
             fig.tight_layout()
         
@@ -252,15 +288,61 @@ def plot_csv(paths):
         print(f"图像已保存至: {png_path}")
         plt.close(fig)
 
+EPILOG = """
+Examples:
+  kulun -e data.dat                从单个 .dat 文件提取数据为 CSV
+  kulun -e ./data_folder/          批量提取文件夹内所有 .dat 文件
+  kulun -c a.csv b.csv             按顺序合并多个 CSV 文件
+  kulun -ec a.dat b.dat            提取多个 .dat 并合并为单个 CSV
+  kulun -p data.csv                绘制滴定曲线及一阶导分析图
+  kulun -cp a.csv b.csv            合并 CSV 并生成合并后的分析图
+  kulun -ecp a.dat b.dat           提取、合并、绘图，一步到位
+
+Project home: https://github.com/EricZhangpku/kulun
+"""
+
+
 def main():
-    parser = argparse.ArgumentParser(description="处理库仑滴定 .dat 文件。")
-    parser.add_argument('-e', '--extract', nargs='+', help="从 .dat 文件或整个文件夹中提取第4和第5列数据")
-    parser.add_argument('-c', '--combine', nargs='+', help="顺序合并多个已提取的 .csv 文件")
-    parser.add_argument('-ec', '--extract-combine', nargs='+', help="顺序提取多个 .dat 文件并合并（不支持直接处理整个文件夹）")
-    parser.add_argument('-p', '--plot', nargs='+', help="一键画出指定 CSV 文件的滴定曲线和一阶导分析图像并保存，支持多条平行滴定曲线")
-    parser.add_argument('-cp', '--combine-plot', nargs='+', help="顺序合并多个已提取的 .csv 文件，并生成合并后数据的图线")
-    parser.add_argument('-ecp', '--extract-combine-plot', nargs='+', help="顺序提取多个 .dat 文件并合并，最后生成合并后数据的图线")
-    
+    parser = argparse.ArgumentParser(
+        prog="kulun",
+        description="库仑滴定 (Coulomb titration) .dat 数据处理与科研绘图工具。\n"
+                    "支持提取、合并、一键绘制滴定曲线及一阶导数分析图。",
+        epilog=EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+
+    parser.add_argument(
+        '-V', '--version', action='version',
+        version=f'kulun {__version__}',
+        help="显示版本号并退出",
+    )
+
+    actions = parser.add_argument_group("操作模式（至少选一项）")
+    actions.add_argument(
+        '-e', '--extract', nargs='+', metavar='PATH',
+        help="从 .dat 文件或整个文件夹中提取第4、5列数据，保存为同名的 .csv 文件",
+    )
+    actions.add_argument(
+        '-c', '--combine', nargs='+', metavar='CSV',
+        help="按顺序合并多个 .csv 文件，时间轴自动平移确保连续",
+    )
+    actions.add_argument(
+        '-ec', '--extract-combine', nargs='+', metavar='DAT',
+        help="提取多个 .dat 文件后按顺序合并（不支持文件夹）",
+    )
+    actions.add_argument(
+        '-p', '--plot', nargs='+', metavar='CSV',
+        help="绘制 CSV 文件的滴定曲线与一阶导分析图，自动识别平行曲线并标注突跃点",
+    )
+    actions.add_argument(
+        '-cp', '--combine-plot', nargs='+', metavar='CSV',
+        help="合并多个 CSV 文件并生成合并后的分析图",
+    )
+    actions.add_argument(
+        '-ecp', '--extract-combine-plot', nargs='+', metavar='DAT',
+        help="提取多个 .dat 文件, 合并, 绘图, 一步到位",
+    )
+
     args = parser.parse_args()
 
     if args.extract:
