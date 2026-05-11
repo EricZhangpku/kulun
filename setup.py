@@ -8,7 +8,8 @@ if os.path.exists("README.md"):
 
 setup(
     name="kulun",
-    version="1.1.0",
+    version="1.1.1",
+    license="MIT",
     author="Jiahang Zhang",
     author_email="2062605586@qq.com",
     description="Coulomb titration .dat data processing and scientific plotting CLI tool",
