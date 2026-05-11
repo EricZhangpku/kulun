@@ -312,7 +312,7 @@ def main():
     )
 
     parser.add_argument(
-        '-V', '--version', action='version',
+        '-v', '-V', '--version', action='version',
         version=f'kulun {__version__}',
         help="显示版本号并退出",
     )
