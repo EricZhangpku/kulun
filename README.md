@@ -4,7 +4,9 @@
 [![Python](https://img.shields.io/pypi/pyversions/kulun)](https://pypi.org/project/kulun/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-`kulun` 是一个用 Python 编写的命令行工具，专门用于提取、合并并绘制由 *北大化院定分实验教学组* 开发的库仑滴定软件所生成的 `.dat` 数据文件。该工具能够快速绘制滴定曲线及一阶导数图，并自动标注突跃点的时间间隔。
+> **v2.0.0 已发布** — 新增多曲线对比叠加绘图（`-t` / `-et`）、更新自动检测提醒、文件夹智能识别等多项功能。详见下方 [命令详解](#命令详解) 与 [GitHub Releases](https://github.com/EricZhangpku/kulun/releases)。
+
+`kulun` 是一个用 Python 编写的命令行工具，专门用于提取、合并并绘制由 *北大化院定分实验教学组* 开发的库仑滴定软件所生成的 `.dat` 数据文件。支持滴定曲线及一阶导数分析、多曲线对比叠加、突跃点自动标注，启动时自动检测 PyPI 新版本并提醒更新。
 
 ---
 
@@ -19,6 +21,8 @@
   - [4. 绘制科研图 `-p`](#4-绘制科研图--p)
   - [5. 合并 + 绘图 `-cp`](#5-合并--绘图--cp)
   - [6. 一步到位 `-ecp`](#6-一步到位--ecp)
+  - [7. 多曲线对比图 `-t`](#7-多曲线对比图--t)
+  - [8. 提取 + 对比 `-et`](#8-提取--对比--et)
 - [常见问题](#常见问题)
 - [从源码安装（开发者）](#从源码安装开发者)
 - [许可证](#许可证)
@@ -39,7 +43,7 @@ pip install kulun
 kulun --version
 ```
 
-如果输出了版本号（如 `kulun 1.1.0`），说明安装成功。
+如果输出了版本号（如 `kulun 2.0.0`），说明安装成功。
 
 > *如果你是第一次接触终端*——
 > - **Windows**: 按 `Win(⊞) + R`，输入 "cmd" 回车。
@@ -66,6 +70,19 @@ kulun -p my_data.csv
 ```bash
 kulun -ecp file1.dat file2.dat file3.dat
 # → 提取 → 合并 → 绘图，一步完成
+```
+
+如果你需要将**多次独立实验**的滴定曲线叠加在**同一张图**中对比：
+
+```bash
+# 直接对比已提取的 CSV
+kulun -t run1.csv run2.csv run3.csv
+
+# 或一步到位：提取 .dat 并叠加对比
+kulun -et run1.dat run2.dat run3.dat
+
+# 显示数据散点（不同曲线使用不同形状）
+kulun -td run1.csv run2.csv
 ```
 
 ---
@@ -161,6 +178,51 @@ kulun -p combined.csv                  # 绘图
 
 ---
 
+### 7. 多曲线对比图 `-t`
+
+> 将多个 CSV 文件的滴定曲线叠加在同一张图中，自动拟合平滑曲线并以不同颜色区分，右上角附有图例。
+
+```bash
+# 仅显示拟合曲线
+kulun -t run1.csv run2.csv run3.csv
+
+# 同时显示数据散点，不同曲线使用不同形状标记
+kulun -td run1.csv run2.csv run3.csv
+```
+
+等价写法：`-tu` = `-t` + `-u`（仅曲线，默认行为），`-td` = `-t` + `-d`（显示数据散点）。
+
+**输出图片包含：**
+- 多条不同颜色的平滑拟合曲线
+- 可选的数据散点（`-d`），每条曲线使用不同的标记形状
+- 右上角图例：支持普通文本与 LaTeX 格式（自动识别）
+- 自动询问每条曲线的图例名称（敲下 Enter 则直接使用 CSV 文件名）
+
+**交互流程：** 程序会先识别每个 CSV 中的平行曲线数量，若超过 1 条则让用户选择；随后询问每条曲线的图例名称（敲下 Enter 则直接使用 CSV 文件名），支持空格、特殊字符或 LaTeX 公式。
+
+---
+
+### 8. 提取 + 对比 `-et`
+
+> `-e` + `-t` 的组合方法：先提取 `.dat`，再叠加绘制对比图。**支持直接传入文件夹**。
+
+```bash
+# 从多个 .dat 文件一步生成对比图
+kulun -et run1.dat run2.dat run3.dat
+
+# 使用文件夹：自动提取所有 .dat，并询问是否包含已有的 .csv
+kulun -et ./data_folder/
+
+# 含数据点版本
+kulun -etd run1.dat run2.dat
+```
+
+等价写法：`-etu` = `-et` + `-u`（默认行为），`-etd` = `-et` + `-d`。
+
+> **文件夹智能识别：** 程序会列出文件夹中无法转换的非 `.dat` 文件，若发现已有 `.csv` 文件，会逐个询问是否一并加入对比图，避免重复提取。
+
+---
+
 ## 常见问题
 
 ### Q: 安装时报错 `pip: command not found`
@@ -190,7 +252,9 @@ pip install kulun
 pip uninstall kulun
 ```
 
-### Q: 如何更新到最新版本
+### Q: 程序启动时提示新版本
+
+`kulun` v2.0 起内置了自动更新检测：启动时后台静默查询 PyPI，若发现新版本会在终端打印提醒（24 小时内不会重复检查）。运行以下命令即可更新：
 
 ```bash
 pip install --upgrade kulun
