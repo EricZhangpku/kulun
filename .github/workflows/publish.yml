@@ -13,6 +13,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-tags: true
 
       - name: Extract version from setup.py
         id: version
@@ -24,7 +26,7 @@ jobs:
         id: check
         run: |
           TAG="v${{ steps.version.outputs.version }}"
-          if git rev-parse "$TAG" >/dev/null 2>&1; then
+          if git ls-remote --tags origin "$TAG" | grep -q "$TAG"; then
             echo "Tag $TAG already exists — nothing to publish."
             echo "skip=true" >> "$GITHUB_OUTPUT"
           else
