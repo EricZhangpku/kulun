@@ -4,7 +4,7 @@
 [![Python](https://img.shields.io/pypi/pyversions/kulun)](https://pypi.org/project/kulun/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-> **v2.1.1 已发布** — 修正了 LaTeX 字体与正常字体的兼容性问题，按照科研绘图标准优化了中英文字体配置，为 `-p` 方法加入了可自定义图例，绘图标题现已支持自定义与 LaTeX 格式，并修复了若干 bug。（v2.0.0 版本）新增多曲线对比叠加绘图（`-t` / `-et`）、更新自动检测提醒、文件夹智能识别等多项功能。详见下方 [命令详解](#命令详解) 与 [GitHub Releases](https://github.com/EricZhangpku/kulun/releases)。
+> **v2.2.0 已发布** — 重大更新：将底层绘图引擎从 matplotlib 迁移至 plotly，**彻底解决了中文字体在各操作系统上的兼容性问题**。新增化学式上下标支持（`_` `^` `{}`）、文件保存冲突智能检测、全命令文件类型校验与软报错、`-t` 命令支持文件夹及 dat/csv 混传、科研风格排版优化（封闭轴线、斜体正体、突跃点避让、自适应尺寸）。详见下方 [命令详解](#命令详解) 与 [GitHub Releases](https://github.com/EricZhangpku/kulun/releases)。
 
 `kulun` 是一个用 Python 编写的命令行工具，专门用于提取、合并并绘制由 *北京大学化学与分子工程学院定量分析化学实验教学组* 开发的库仑滴定软件所生成的 `.dat` 数据文件。支持滴定曲线及一阶导数分析、多曲线对比叠加、突跃点自动标注，启动时自动检测 PyPI 新版本并提醒更新。
 
@@ -43,7 +43,7 @@ pip install kulun
 kulun --version
 ```
 
-如果输出了版本号（如 `kulun 2.1.1`），说明安装成功。
+如果输出了版本号（如 `kulun 2.2.0`），说明安装成功。
 
 > *如果你是第一次接触终端*——
 > - **Windows**: 按 `Win(⊞) + R`，输入 "cmd" 回车。
@@ -141,15 +141,17 @@ kulun -ec run1.dat run2.dat run3.dat
 kulun -p data.csv
 ```
 
-**交互流程：** 程序会先询问图片标题（支持 LaTeX 格式，敲下 Enter 则采用默认标题），随后询问是否需要添加图例（y/N，敲下 Enter 则跳过），若添加图例则进一步询问图例名称（支持 LaTeX 格式，敲下 Enter 则采用 CSV 文件名）。
+**交互流程：** 程序会先询问图片标题（支持 `_` `^` `{}` 表示化学式，例如 `SO_4^{2-}` 表示 SO₄²⁻，敲下 Enter 则采用默认标题），随后询问是否需要添加图例（Y/n），若添加图例则进一步询问图例名称。
 
 **输出图片包含：**
-- 蓝色曲线：原始数据 & Savitzky-Golay 平滑曲线
+- 蓝色曲线：原始数据散点 & Savitzky-Golay 平滑曲线
 - 红色曲线：一阶导数 d*E*/d*t*
 - 红色三角：突跃点（导数极值点）
 - 灰色虚线：突跃点在时间轴上的投影
 - 图片底部：每条平行曲线的突跃时间间隔
 - 可选：右上角图例
+- 物理量斜体、单位正体；全封闭坐标轴；突跃点标注与横轴标题自动避让
+- 图片横纵比自动适配曲线条数（1 条 1:1，多条 2:1）
 
 ---
 
@@ -183,11 +185,14 @@ kulun -p combined.csv                  # 绘图
 
 ### 7. 多曲线对比图 `-t`
 
-> 将多个 CSV 文件的滴定曲线叠加在同一张图中，自动拟合平滑曲线并以不同颜色区分，右上角附有图例。
+> 将多个 CSV（或含 dat 的混合路径）的滴定曲线叠加在同一张图中，自动拟合平滑曲线并以不同颜色区分，右上角附有图例。**支持直接传入文件夹**，自动识别其中的 CSV 和 DAT 文件（若 DAT 已有对应 CSV 则直接使用，否则提示先转换）。
 
 ```bash
 # 仅显示拟合曲线
 kulun -t run1.csv run2.csv run3.csv
+
+# 传入文件夹或混合路径
+kulun -t ./data_folder/ run1.csv
 
 # 同时显示数据散点，不同曲线使用不同形状标记
 kulun -td run1.csv run2.csv run3.csv
@@ -198,11 +203,10 @@ kulun -td run1.csv run2.csv run3.csv
 **输出图片包含：**
 - 多条不同颜色的平滑拟合曲线
 - 可选的数据散点（`-d`），每条曲线使用不同的标记形状
-- 右上角图例：支持普通文本与 LaTeX 格式（自动识别）
-- 可自定义的图片标题（支持 LaTeX 格式，敲下 Enter 采用默认标题）
-- 交互式询问最终文件命名
+- 右上角图例
+- 全封闭坐标轴；物理量斜体、单位正体；1:1 正方尺寸
 
-**交互流程：** 程序会先识别每个 CSV 中的平行曲线数量，若超过 1 条则让用户选择；随后询问每条曲线的图例名称（支持 LaTeX 格式，敲下 Enter 则采用 CSV 文件名）；最后询问图片标题（支持 LaTeX 格式，敲下 Enter 则采用默认标题「Contrast Overlay」）。
+**交互流程：** 程序会先识别每个 CSV 中的平行曲线数量，若超过 1 条则让用户选择；随后询问每条曲线的图例名称（支持 `_` `^` `{}` 表示化学式，敲下 Enter 则采用 CSV 文件名）；最后询问图片标题（敲下 Enter 则采用默认标题「Contrast Overlay」）。
 
 ---
 
@@ -235,20 +239,46 @@ kulun -etd run1.dat run2.dat
 
 ### Q: 绘图中文显示为方框
 
-这是字体问题，`kulun` 已自动适配 Windows / macOS / Linux 的中文字体（宋体/黑体），一般不需要额外配置。如果仍有问题，请提交 [Issue](https://github.com/EricZhangpku/kulun/issues)。
+v2.2.0 已将绘图引擎从 matplotlib 迁移至 plotly，利用浏览器引擎的 CSS 字体回落机制处理中文，覆盖 Windows / macOS / Linux 的常见中文字体，无需用户手动配置。如果仍有问题，请提交 [Issue](https://github.com/EricZhangpku/kulun/issues)。
+
+> 对于 Ubuntu / Debian 等中文字体可能缺失的 Linux 发行版，程序启动时会自动检测并提示安装：
+> ```bash
+> sudo apt-get install fonts-noto-cjk
+> ```
 
 ### Q: 绘图时报错缺少库
 
-`kulun` 依赖 `numpy`、`scipy`、`matplotlib`，安装时会自动带上。如果你用了虚拟环境，请确认已激活：
+`kulun` 依赖以下 Python 包（安装时会自动带上）：
+
+| 包名 | 用途 |
+|------|------|
+| `numpy` | 数值计算 |
+| `scipy` | 信号平滑与插值 |
+| `plotly` | 绘图引擎 |
+| `kaleido` | 静态图像导出（PNG） |
+
+如果你用了虚拟环境，请确认已激活：
 
 ```bash
 # 先激活虚拟环境，再安装
 pip install kulun
 ```
 
+### Q: 如何在标题/图例中表示化学式
+
+使用 `_` `^` `{}` 即可，例如 `SO_4^{2-}` 渲染为 SO₄²⁻，`Fe_2O_3` 渲染为 Fe₂O₃。程序启动时会给出示例提示。
+
+### Q: 文件已存在时会发生什么
+
+程序会自动检测同名文件（包括 `xxx(1).csv` 等编号变体），列出全部已有文件并询问是否替换。选择 n 后按 Enter 会自动采用下一个可用编号。
+
+### Q: 传入了不支持的文件类型
+
+程序会对每个命令校验传入的文件类型——例如 `-c` / `-p` 只能接受 CSV，`-e` 只能接受 DAT。若类型不匹配，会给出明确提示（如 "请先通过 -e 将 .dat 转换为 CSV 格式"）。文件不存在时也会有软报错而非 traceback。
+
 ### Q: 图片坐标轴数字太小或排版不美观
 
-这是为了兼顾多条平行曲线的复杂场景而做的自动布局。如果需要定制，请提交 [Issue](https://github.com/EricZhangpku/kulun/issues) 说明具体需求。
+排版已按科研绘图标准优化（全封闭坐标轴、物理量斜体单位正体、曲线粗度 2× 坐标轴、尺寸自适应）。如需进一步定制，请提交 [Issue](https://github.com/EricZhangpku/kulun/issues)。
 
 ### Q: 如何卸载
 

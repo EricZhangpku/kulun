@@ -8,7 +8,6 @@ import time
 import threading
 import urllib.request
 import argparse
-import warnings
 
 try:
     from importlib.metadata import version as _get_version
@@ -18,47 +17,92 @@ except Exception:
 
 try:
     import numpy as np
-    import matplotlib.pyplot as plt
-    import matplotlib.font_manager as fm
-    from matplotlib.lines import Line2D
+    import plotly.graph_objects as go
+    from plotly.subplots import make_subplots
     from scipy.signal import savgol_filter
     from scipy.interpolate import interp1d
     HAS_LIBS = True
 except ImportError:
     HAS_LIBS = False
 
-def _get_songti_fonts():
-    """Return available Chinese 宋体 (Song/serif) font name for the current system."""
+# CSS font-family strings for plotly figures.  The browser (or kaleido)
+# resolves them left-to-right, so Latin text hits Arial / TNR first, and
+# Chinese glyphs fall through to the platform-specific CJK font.
+_SANS_FONT = ("Arial, 'Microsoft YaHei', "
+              "'PingFang SC', 'PingFang HK', 'Heiti TC', STHeiti, "
+              "'WenQuanYi Micro Hei', 'Noto Sans CJK SC', sans-serif")
+_SERIF_FONT = ("Times New Roman, SimSun, "
+               "'Songti SC', 'Songti SC Light', STSong, "
+               "'Noto Serif CJK SC', 'AR PL UMing CN', serif")
+
+_CJK_CHECKED = False
+
+
+def _check_cjk_fonts():
+    """Warn once if no CJK font files are detected on the current system."""
+    global _CJK_CHECKED
+    if _CJK_CHECKED:
+        return
+    _CJK_CHECKED = True
+
     if sys.platform == 'darwin':
-        candidates = ['Songti SC', 'STSong']
+        _dirs = ['/System/Library/Fonts/', '/System/Library/Fonts/Supplemental/',
+                 '/Library/Fonts/']
+        _patterns = ['PingFang', 'Heiti', 'Songti', 'STSong', 'STHeiti']
+        _hint = "macOS 用户请确认系统字体未损坏。"
     elif sys.platform == 'win32':
-        candidates = ['SimSun']
+        _windir = os.environ.get('WINDIR', 'C:\\Windows')
+        _dirs = [os.path.join(_windir, 'Fonts')]
+        _patterns = ['msyh', 'YaHei', 'SimHei', 'SimSun']
+        _hint = "Windows 用户请确认已安装中文字体。"
     else:
-        candidates = ['Noto Serif CJK SC', 'AR PL UMing CN']
+        # Linux: prefer the fast fontconfig query
+        try:
+            import subprocess
+            result = subprocess.run(
+                ['fc-list', ':lang=zh'], capture_output=True, text=True, timeout=5)
+            if result.stdout.strip():
+                return  # CJK fonts available
+        except Exception:
+            pass
+        # filesystem fallback
+        _dirs = ['/usr/share/fonts/', '/usr/local/share/fonts/',
+                 os.path.expanduser('~/.fonts/'),
+                 os.path.expanduser('~/.local/share/fonts/')]
+        _patterns = ['Noto', 'WenQuanYi', 'CJK', 'wqy', 'uming', 'ukai', 'Droid']
+        _hint = ("Linux 用户请安装中文字体，例如：sudo apt-get install fonts-noto-cjk\n"
+                 "        或 sudo yum install google-noto-cjk-fonts")
 
-    available = {f.name for f in fm.fontManager.ttflist}
-    found = [name for name in candidates if name in available]
-    if not found:
-        print("警告：未检测到系统中文字体（宋体），底部说明文字中的中文可能无法正常显示。",
-              file=sys.stderr)
-    return found
+    for _d in _dirs:
+        if not os.path.isdir(_d):
+            continue
+        try:
+            _entries = os.scandir(_d)
+        except OSError:
+            continue
+        with _entries:
+            for _entry in _entries:
+                if not _entry.is_file():
+                    continue
+                if not _entry.name.lower().endswith(('.ttf', '.otf', '.ttc')):
+                    continue
+                _low = _entry.name.lower()
+                for _p in _patterns:
+                    if _p.lower() in _low:
+                        return  # found — all good
 
+    print(f"警告：未检测到中文字体，中文可能无法正常显示。{_hint}",
+          file=sys.stderr)
 
-def _get_heiti_fonts():
-    """Return available Chinese 黑体 (Hei/sans-serif) font name for the current system."""
-    if sys.platform == 'darwin':
-        candidates = ['PingFang SC', 'PingFang HK', 'PingFang TC']
-    elif sys.platform == 'win32':
-        candidates = ['Microsoft YaHei']
-    else:
-        candidates = ['Noto Sans CJK SC', 'WenQuanYi Micro Hei']
-
-    available = {f.name for f in fm.fontManager.ttflist}
-    found = [name for name in candidates if name in available]
-    if not found:
-        print("警告：未检测到系统中文字体（黑体），中文可能无法正常显示。",
-              file=sys.stderr)
-    return found
+# Marker symbol mapping: matplotlib → plotly
+_MARKER_MAP = {
+    'o': 'circle', 's': 'square', '^': 'triangle-up', 'D': 'diamond',
+    'v': 'triangle-down', '<': 'triangle-left', '>': 'triangle-right',
+    'p': 'pentagon', '*': 'star', 'h': 'hexagon', 'H': 'hexagon2',
+    '8': 'octagon', 'X': 'x-thin', 'd': 'diamond-wide', 'P': 'cross-thin',
+    '+': 'cross', 'x': 'x', '1': 'line-ns', '2': 'line-ew',
+    '3': 'line-ne', '4': 'line-nw',
+}
 
 # 30+ distinct colors for contrast overlay plots
 _CONTRAST_COLORS = [
@@ -113,12 +157,17 @@ def _preprocess_args(argv):
     return new_argv
 
 
-def _detect_and_wrap_latex(text):
-    """Auto-detect LaTeX formatting in legend labels and wrap for mathtext."""
-    if '$' in text:
-        return text
-    if re.search(r'\\[a-zA-Z]+', text):
-        return f'${text}$'
+def _format_sub_sup(text):
+    """Convert ``_{...}`` / ``^{...}`` to HTML subscript / superscript tags.
+
+    Example: ``SO_4^{2-}`` → ``SO<sub>4</sub><sup>2-</sup>``
+    which plotly renders as SO₄²⁻ in the figure's native font.
+    """
+    text = re.sub(r'\_\{([^}]*)\}', r'<sub>\1</sub>', text)
+    text = re.sub(r'\^\{([^}]*)\}', r'<sup>\1</sup>', text)
+    # bare _x / ^x (single char, no braces)
+    text = re.sub(r'\_(?!\{)(\S)', r'<sub>\1</sub>', text)
+    text = re.sub(r'\^(?!\{)(\S)', r'<sup>\1</sup>', text)
     return text
 
 
@@ -131,6 +180,61 @@ def _prompt_yes_no(prompt_text):
         if answer == '否' or answer.lower() == 'n':
             return False
         print(f"输入错误: '{answer}'，请输入 Y/y (是) 或 N/n (否)。")
+
+
+def _safe_save_path(filepath):
+    """Check *filepath* for existence; prompt to overwrite or rename.
+
+    Scans for existing numbered siblings and suggests the next free
+    number as the default.
+    """
+    if not os.path.exists(filepath):
+        return filepath
+
+    directory = os.path.dirname(filepath)
+    base, ext = os.path.splitext(os.path.basename(filepath))
+
+    # find all existing numbered versions
+    existing = []
+    i = 1
+    while True:
+        candidate = os.path.join(directory, f"{base}({i}){ext}")
+        if os.path.exists(candidate):
+            existing.append(os.path.basename(candidate))
+            i += 1
+        else:
+            break
+    next_num = i  # first free slot
+
+    all_existing = [os.path.basename(filepath)] + existing
+    existing_str = ", ".join(all_existing)
+    replace_target = f" {os.path.basename(filepath)}" if existing else ""
+
+    if _prompt_yes_no(f"文件 {existing_str} 已存在，是否替换{replace_target}？(Y/n): "):
+        return filepath
+
+    default_new = os.path.join(directory, f"{base}({next_num}){ext}")
+    raw = input(
+        f"请输入新文件名（敲下 Enter 则采用「{os.path.basename(default_new)}」）: "
+    ).strip()
+
+    if raw:
+        if not os.path.splitext(raw)[1]:
+            raw += ext
+        if not os.path.dirname(raw):
+            raw = os.path.join(directory, raw)
+        if not os.path.exists(raw):
+            return raw
+        # custom name also exists → auto-number it
+        u_base, u_ext = os.path.splitext(raw)
+        j = 1
+        while True:
+            u_candidate = f"{u_base}({j}){u_ext}"
+            if not os.path.exists(u_candidate):
+                return u_candidate
+            j += 1
+
+    return default_new
 
 
 def _check_for_updates():
@@ -183,10 +287,16 @@ def process_file_extract(file_path):
     if not file_path.endswith('.dat'):
         return None
 
-    out_path = file_path[:-4] + '.csv'
+    out_path = _safe_save_path(file_path[:-4] + '.csv')
 
     csv_data = []
-    with open(file_path, 'r', encoding='utf-8', errors='replace') as f:
+    try:
+        f = open(file_path, 'r', encoding='utf-8', errors='replace')
+    except FileNotFoundError:
+        print(f"文件不存在: {file_path}。"
+              "请确保文件存在，并且处于正确的路径中。", file=sys.stderr)
+        return None
+    with f:
         for line in f:
             parts = line.strip().split()
             if len(parts) >= 5:
@@ -211,6 +321,9 @@ def process_file_extract(file_path):
 def extract(paths, allow_dir=True):
     out_files = []
     for path in paths:
+        if not os.path.exists(path):
+            print(f"文件/文件夹不存在: {path}。请确保文件/文件夹存在，并且处于正确的路径中。", file=sys.stderr)
+            continue
         if os.path.isdir(path):
             if not allow_dir:
                 print(f"已跳过文件夹 {path}（-ec 模式不支持处理整个文件夹）。")
@@ -226,6 +339,12 @@ def extract(paths, allow_dir=True):
                 out = process_file_extract(f)
                 if out: out_files.append(out)
         else:
+            if not path.endswith('.dat'):
+                if path.endswith('.csv'):
+                    print(f"{path} 是 CSV 文件，提取操作需要 .dat 文件。")
+                else:
+                    print(f"不支持的文件类型: {path}")
+                continue
             out = process_file_extract(path)
             if out: out_files.append(out)
     return out_files
@@ -235,15 +354,32 @@ def combine(csv_paths, out_filename=None):
         print("没有传入可供合并的 CSV 文件。")
         return
 
+    # folders are never accepted
+    for path in csv_paths:
+        if os.path.isdir(path):
+            print(f"-c 命令不支持传递整个文件夹: {path}，请顺序传入文件。")
+            return
+
     combined_data = []
     current_max_t = 0.0
 
     for i, path in enumerate(csv_paths):
         if not path.endswith('.csv'):
-            print(f"已跳过非 CSV 文件: {path}")
+            if path.endswith('.dat'):
+                print(f"{path} 是 .dat 文件，请先通过 -e 将其转换为 CSV 格式。")
+            else:
+                print(f"不支持的文件类型: {path}")
+            continue
+        if not os.path.exists(path):
+            print(f"文件不存在: {path}。请确保文件存在，并且处于正确的路径中。", file=sys.stderr)
             continue
 
-        with open(path, 'r', encoding='utf-8') as f:
+        try:
+            f = open(path, 'r', encoding='utf-8')
+        except FileNotFoundError:
+            print(f"文件不存在: {path}。请确保文件存在，并且处于正确的路径中。", file=sys.stderr)
+            continue
+        with f:
             reader = csv.reader(f)
             header = next(reader, None) # skip header
 
@@ -272,12 +408,21 @@ def combine(csv_paths, out_filename=None):
 
         current_max_t += local_max_t
 
+    if len(combined_data) == 0:
+        print("没有可供合并的有效 CSV 数据。")
+        return
+
     if not out_filename:
-        out_filename = input("请输入合并后数据生成的保存文件名（例如 combined.csv）: ").strip()
+        while True:
+            out_filename = input("请输入合并后数据生成的保存文件名（例如 combined.csv）: ").strip()
+            if out_filename:
+                break
+            print("名称不能为空，请重新输入。")
         _, ext = os.path.splitext(out_filename)
         if not ext:
             out_filename += '.csv'
 
+    out_filename = _safe_save_path(out_filename)
     with open(out_filename, 'w', newline='', encoding='utf-8') as f:
         writer = csv.writer(f)
         writer.writerow(['Time(s)', 'E(mV)'])
@@ -288,29 +433,31 @@ def combine(csv_paths, out_filename=None):
 
 def plot_csv(paths):
     if not HAS_LIBS:
-        print("缺少绘图需要的 numpy, scipy, matplotlib 库，不能绘图。由于您当前环境中可能未安装，请使用 pip install numpy scipy matplotlib 安装。")
+        print("缺少绘图需要的 numpy, scipy, plotly 库，不能绘图。"
+              "请使用 pip install numpy scipy plotly kaleido 安装。")
         return
 
-    warnings.filterwarnings('ignore', message='Glyph.*missing from font')
-
-    # 自动检测系统中可用的中文字体，兼容 Windows / macOS / Linux
-    songti_fonts = _get_songti_fonts()
-    heiti_fonts = _get_heiti_fonts()
-    # sans-serif：英文 Arial，中文黑体 — 用于标题、坐标轴、图例、刻度
-    plt.rcParams['font.sans-serif'] = ['Arial'] + heiti_fonts + ['sans-serif']
-    # serif：英文 Times New Roman，中文宋体 — 用于底部说明文字
-    plt.rcParams['font.serif'] = ['Times New Roman'] + songti_fonts + ['serif']
-    plt.rcParams['font.family'] = 'sans-serif'
-    plt.rcParams['axes.unicode_minus'] = False
-    plt.rcParams['mathtext.fontset'] = 'dejavusans'
+    _check_cjk_fonts()
 
     for path in paths:
+        if os.path.isdir(path):
+            print(f"不支持的文件类型: {path}（文件夹）")
+            continue
         if not path.endswith('.csv'):
-            print(f"跳过非 CSV 文件: {path}")
+            if path.endswith('.dat'):
+                print(f"{path} 是 .dat 文件，请先通过 -e 将其转换为 CSV 格式。")
+            else:
+                print(f"不支持的文件类型: {path}")
+            continue
+        if not os.path.exists(path):
+            print(f"文件不存在: {path}。请确保文件存在，并且处于正确的路径中。", file=sys.stderr)
             continue
 
         try:
             data = np.loadtxt(path, delimiter=',', skiprows=1)
+        except FileNotFoundError:
+            print(f"文件不存在: {path}。请确保文件存在，并且处于正确的路径中。", file=sys.stderr)
+            continue
         except Exception as e:
             print(f"读取 {path} 失败: {e}")
             continue
@@ -321,24 +468,38 @@ def plot_csv(paths):
         times = data[:, 0]
         potentials = data[:, 1]
 
-        # 如果相邻两个点之间电位上升超过 100mV，作为新的平行曲线的起点
         diff = np.diff(potentials)
         split_indices = np.where(diff > 100)[0] + 1
         segments = np.split(data, split_indices)
 
         print(f"\n正在处理 {path} (共自动识别到 {len(segments)} 条平行曲线):")
-        print("提示：已采用 Savitzky-Golay 滤波方法：窗口点数 5，平滑参数 2 (对于曲线平滑)。")
+        print("提示：已采用 Savitzky-Golay 滤波方法：窗口点数 5，多项式阶数 2")
 
-        fig, ax1 = plt.subplots(figsize=(12, 7))
-        ax2 = ax1.twinx()
+        n_curves = len(segments)
+        # n=1 → 1:1,  n≥2 → 2:1
+        fig_width = 600 if n_curves == 1 else 1000
+        fig_height = 600 if n_curves == 1 else 500
 
-        # 稍微增加横坐标范围，避免最右边文字越界
-        ax1.set_xlim(times.min() - 5, times.max() + max(15, (times.max()-times.min())*0.05))
+        fig = make_subplots(specs=[[{"secondary_y": True}]])
 
-        # 为了保证投影文字不会在横轴以下甚至看不清，可以扩大底部留白
-        y_min = potentials.min()
-        y_max = potentials.max()
-        ax1.set_ylim(y_min - (y_max - y_min)*0.15, y_max + (y_max - y_min)*0.05)
+        x_margin = max(35, (times.max() - times.min()) * 0.12)
+        y_min, y_max = potentials.min(), potentials.max()
+        y_pad = (y_max - y_min) * 0.10
+
+        # Closed black axis box on all 4 sides
+        _ax_line = dict(showline=True, linewidth=1.25, linecolor='black',
+                        mirror=True, ticks='inside')
+        _ax_font = dict(color='#1a1a1a', size=13)
+        _ax_title = dict(size=15)
+
+        fig.update_xaxes(range=[times.min() - 5, times.max() + x_margin],
+                         **_ax_line)
+        fig.update_yaxes(
+            range=[y_min - y_pad, y_max + (y_max - y_min) * 0.05],
+            title_text="<i>E</i> / mV",
+            title_font=dict(color='#1a1a1a', **_ax_title),
+            tickfont=_ax_font, secondary_y=False, **_ax_line,
+        )
 
         jump_points = []
         last_t, last_E = None, None
@@ -351,20 +512,32 @@ def plot_csv(paths):
             t_seg = segment_data[:, 0]
             e_seg = segment_data[:, 1]
 
-            # 画csv表格中的离散点（蓝圆点）
-            ax1.plot(t_seg, e_seg, 'b.', label='Raw Data' if i==0 else "")
+            # 离散点（深蓝色小圆点）
+            fig.add_trace(go.Scatter(
+                x=t_seg, y=e_seg, mode='markers',
+                marker=dict(color='#1f77b4', symbol='circle', size=4),
+                showlegend=False,
+            ), secondary_y=False)
 
             # 平滑
             e_smooth = savgol_filter(e_seg, window_length=5, polyorder=2)
 
-            # 用蓝色线条连接相邻两条曲线之间（上一条的结尾和本条的起点）
+            # 连接相邻曲线（2× 坐标轴线宽）
             if i > 0 and last_t is not None:
-                ax1.plot([last_t, t_seg[0]], [last_E, e_smooth[0]], 'b-', alpha=0.5)
+                fig.add_trace(go.Scatter(
+                    x=[last_t, t_seg[0]], y=[last_E, e_smooth[0]],
+                    mode='lines', line=dict(color='#1f77b4', width=2.5),
+                    opacity=0.4, showlegend=False,
+                ), secondary_y=False)
 
-            # 蓝色线条画出平滑的曲线
-            ax1.plot(t_seg, e_smooth, 'b-', label='Smoothed E' if i==0 else "")
+            # 平滑曲线（2× 坐标轴线宽）
+            fig.add_trace(go.Scatter(
+                x=t_seg, y=e_smooth, mode='lines',
+                line=dict(color='#1f77b4', width=2.5),
+                showlegend=False,
+            ), secondary_y=False)
 
-            # 按照0.1s进行插值并求导
+            # 插值求导
             if len(t_seg) > 1 and t_seg[-1] > t_seg[0]:
                 if len(np.unique(t_seg)) != len(t_seg):
                     print(f"  - 数据错误：第 {i+1} 段曲线的时间列中存在重复值"
@@ -374,83 +547,143 @@ def plot_csv(paths):
                     last_E = e_smooth[-1]
                     continue
                 f_interp = interp1d(t_seg, e_smooth, kind='cubic')
-                t_interp = np.arange(t_seg[0], t_seg[-1]+0.001, 0.1)
-
-                # 防止浮点误差导致的边界超限
+                t_interp = np.arange(t_seg[0], t_seg[-1] + 0.001, 0.1)
                 t_interp = t_interp[t_interp <= t_seg[-1]]
                 e_interp = f_interp(t_interp)
 
                 de_dt = np.gradient(e_interp, 0.1)
 
-                # 细红线绘制一阶导曲线
-                ax2.plot(t_interp, de_dt, 'r-', linewidth=1.0, alpha=0.8, label='dE/dt' if i==0 else "")
+                # 一阶导曲线（与坐标轴线宽相同）
+                fig.add_trace(go.Scatter(
+                    x=t_interp, y=de_dt, mode='lines',
+                    line=dict(color='#d62728', width=1.25),
+                    opacity=0.9, showlegend=False,
+                ), secondary_y=True)
 
-                # 寻找导数最负的点（突跃点）
+                # 突跃点标记
                 min_idx = np.argmin(de_dt)
                 t_jump = t_interp[min_idx]
                 de_jump = de_dt[min_idx]
                 jump_points.append(t_jump)
 
-                # 在导数图上标记出来
-                ax2.plot(t_jump, de_jump, 'r^')
+                fig.add_trace(go.Scatter(
+                    x=[t_jump], y=[de_jump], mode='markers',
+                    marker=dict(color='#d62728', symbol='triangle-up', size=8),
+                    showlegend=False,
+                ), secondary_y=True)
 
-                # 虚线投影到横轴并标上时间
-                ax1.axvline(x=t_jump, color='gray', linestyle='--', alpha=0.6)
+                # 灰色虚线投影到横轴
+                fig.add_vline(x=t_jump, line=dict(color='gray', dash='dash',
+                                                  width=1),
+                              opacity=0.6)
 
-                # 在投影线横轴下方写字（去掉s，放到横轴下面）
-                ax1.text(t_jump, -0.015, f'{t_jump:.1f}', color='black', transform=ax1.get_xaxis_transform(),
-                         ha='center', va='top', rotation=90, fontsize=10, clip_on=False)
+                # 横轴下方标注时间
+                fig.add_annotation(
+                    x=t_jump, y=-0.04, xref='x', yref='paper',
+                    text=f'{t_jump:.1f}', showarrow=False,
+                    font=dict(size=13, color='black', family=_SANS_FONT),
+                    textangle=-90, yanchor='top',
+                )
 
             last_t = t_seg[-1]
             last_E = e_smooth[-1]
 
-        ax1.set_xlabel('$t$ / s')
-        ax1.set_ylabel('$E$ / mV', color='b')
-        ax2.set_ylabel('d$E$/d$t$ / mV$\cdot$s$^{-1}$', color='r')
-
-        ax1.tick_params(axis='y', labelcolor='b')
-        ax2.tick_params(axis='y', labelcolor='r')
+        fig.update_yaxes(
+            title_text="d<i>E</i>/d<i>t</i> / mV·s<sup>-1</sup>",
+            title_font=dict(color='#d62728', **_ax_title),
+            tickfont=dict(color='#d62728', size=13),
+            secondary_y=True, **_ax_line,
+        )
 
         default_title = f"Coulomb Titration Curve ({os.path.splitext(os.path.basename(path))[0]})"
-        title_raw = input(f"请输入图片标题（支持 LaTeX 格式，敲下 Enter 则采用默认标题「{default_title}」): ").strip()
+        print("提示：图片标题/图例支持用 _ ^ {} 表示化学式（文件名不支持），例如 SO_4^{2-} 表示 SO₄²⁻")
+        title_raw = input(f"请输入图片标题（敲下 Enter 则采用默认标题「{default_title}」): ").strip()
         if not title_raw:
             title_raw = default_title
-        title_final = _detect_and_wrap_latex(title_raw)
-        plt.title(title_final)
+        title_final = _format_sub_sup(title_raw)
 
-        # 将突跃点间隔放在图像底部左侧，不分行
-        if len(jump_points) > 1:
+        _has_jump_info = len(jump_points) > 1
+
+        fig.update_layout(
+            title=dict(text=title_final, font=dict(family=_SANS_FONT, size=18),
+                       x=0.5, xanchor='center', y=0.94, yanchor='bottom'),
+            font=dict(family=_SANS_FONT, size=13),
+            xaxis=dict(title=dict(text="",
+                                  standoff=5),
+                       tickfont=dict(family=_SANS_FONT, size=13)),
+            yaxis=dict(title=dict(text="<i>E</i> / mV",
+                                  font=dict(family=_SANS_FONT, **_ax_title),
+                                  standoff=2),
+                       tickfont=dict(family=_SANS_FONT, size=13)),
+            yaxis2=dict(title=dict(font=dict(family=_SANS_FONT, **_ax_title),
+                                  standoff=12),
+                        tickfont=dict(family=_SANS_FONT, size=13)),
+            legend=dict(x=0.90, y=0.97, xanchor='right', yanchor='top',
+                        bgcolor='rgba(255,255,255,0.2)',
+                        bordercolor='black', borderwidth=1),
+            template='plotly_white',
+            width=fig_width, height=fig_height,
+            margin=dict(l=70, r=20, t=40, b=60),
+        )
+
+        # 横轴标签用 annotation 实现，支持与突跃点标注避让
+        _xlabel_x = 0.5
+        if jump_points:
+            _t_min, _t_max = times.min(), times.max()
+            _t_range = _t_max - _t_min
+            if _t_range > 0:
+                for _tj in jump_points:
+                    _norm = (_tj - _t_min) / _t_range
+                    if abs(_norm - 0.5) < 0.02:
+                        _xlabel_x = 0.55 if _norm <= 0.5 else 0.45
+                        break
+        fig.add_annotation(
+            x=_xlabel_x, y=-0.06, xref='paper', yref='paper',
+            text="<i>t</i> / s", showarrow=False,
+            font=dict(family=_SANS_FONT, **_ax_title),
+            xanchor='center', yanchor='top',
+        )
+
+        # 突跃点时间间隔放在图内左下角，字号与坐标轴标题一致，离下轴稍远
+        if _has_jump_info:
             intervals = np.diff(jump_points)
             items = []
             for idx, interval in enumerate(intervals):
                 items.append(f"第{idx+1}次与第{idx+2}次: {interval:.1f} s")
-
             info_str = "（突跃点时间间隔）   " + "      ".join(items)
 
-            # 给底部预留一定的边距排版文字
-            bottom_margin = 0.08
-            fig.tight_layout(rect=[0, bottom_margin, 1, 1])
+            fig.add_annotation(
+                x=0.01, y=0.03, xref='paper', yref='paper',
+                text=info_str, showarrow=False,
+                font=dict(family=_SERIF_FONT, size=15),
+                xanchor='left', yanchor='bottom',
+            )
 
-            # 添加文字到整张图片的底部靠左，紧贴图形区域
-            fig.text(0.06, bottom_margin - 0.04, info_str, ha='left', va='bottom',
-                     fontsize=11, fontfamily='serif')
-        else:
-            fig.tight_layout()
-
-        # 图例
+        # 图例（右上角，图内，不覆盖曲线）
         if _prompt_yes_no("是否需要添加图例？(Y/n): "):
             default_legend = os.path.splitext(os.path.basename(path))[0]
-            legend_raw = input(f"请输入图例名称（支持 LaTeX 格式，敲下 Enter 则采用默认名称「{default_legend}」): ").strip()
+            legend_raw = input(f"请输入图例名称（敲下 Enter 则采用默认名称「{default_legend}」): ").strip()
             if not legend_raw:
                 legend_raw = default_legend
-            legend_name = _detect_and_wrap_latex(legend_raw)
-            legend_handle = Line2D([0], [0], color='b', linestyle='-', linewidth=1.5, label=legend_name)
-            ax1.legend(handles=[legend_handle], loc='upper right', framealpha=0.9)
+            legend_name = _format_sub_sup(legend_raw)
+            fig.add_trace(go.Scatter(
+                x=[None], y=[None], mode='lines',
+                line=dict(color='#1f77b4', width=2.5),
+                name=legend_name, showlegend=True,
+            ), secondary_y=False)
+            # 横轴向右延长以容纳图例
+            _x_range = fig.layout.xaxis.range
+            if _x_range:
+                fig.update_xaxes(range=[_x_range[0],
+                                        _x_range[1] + (_x_range[1] - _x_range[0]) * 0.08])
 
-        png_path = os.path.splitext(path)[0] + '.png'
-        plt.savefig(png_path, dpi=300)
-        print(f"图像已保存至: {png_path}")
-        plt.close(fig)
+        png_path = _safe_save_path(os.path.splitext(path)[0] + '.png')
+        try:
+            fig.write_image(png_path, scale=3)
+            print(f"图像已保存至: {png_path}")
+        except Exception as e:
+            print(f"保存图像失败: {e}\n"
+                  "请确认已安装 kaleido: pip install kaleido", file=sys.stderr)
 
 
 def contrast_plot(csv_paths, show_dots=False):
@@ -458,33 +691,38 @@ def contrast_plot(csv_paths, show_dots=False):
 
     Each CSV may contain one or more parallel curves (detected by potential
     jumps > 100 mV).  The user selects which curve to use per file and
-    provides a legend name (plain text or LaTeX).  No derivative curves or
+    provides a legend name.  No derivative curves or
     jump-time annotations are drawn.
     """
     if not HAS_LIBS:
-        print("缺少绘图需要的 numpy, scipy, matplotlib 库，不能绘图。"
-              "请使用如 pip install numpy scipy matplotlib 安装。")
+        print("缺少绘图需要的 numpy, scipy, plotly 库，不能绘图。"
+              "请使用 pip install numpy scipy plotly kaleido 安装。")
         return
 
-    warnings.filterwarnings('ignore', message='Glyph.*missing from font')
-
-    songti_fonts = _get_songti_fonts()
-    heiti_fonts = _get_heiti_fonts()
-    plt.rcParams['font.sans-serif'] = ['Arial'] + heiti_fonts + ['sans-serif']
-    plt.rcParams['font.serif'] = ['Times New Roman'] + songti_fonts + ['serif']
-    plt.rcParams['font.family'] = 'sans-serif'
-    plt.rcParams['axes.unicode_minus'] = False
-    plt.rcParams['mathtext.fontset'] = 'dejavusans'
+    _check_cjk_fonts()
 
     selected_data = []
+    _first_prompt = True
 
     for path in csv_paths:
+        if os.path.isdir(path):
+            print(f"不支持的文件类型: {path}（文件夹）")
+            continue
         if not path.endswith('.csv'):
-            print(f"跳过非 CSV 文件: {path}")
+            if path.endswith('.dat'):
+                print(f"{path} 是 .dat 文件，请先通过 -e 将其转换为 CSV 格式。")
+            else:
+                print(f"不支持的文件类型: {path}")
+            continue
+        if not os.path.exists(path):
+            print(f"文件不存在: {path}。请确保文件存在，并且处于正确的路径中。", file=sys.stderr)
             continue
 
         try:
             data = np.loadtxt(path, delimiter=',', skiprows=1)
+        except FileNotFoundError:
+            print(f"文件不存在: {path}。请确保文件存在，并且处于正确的路径中。", file=sys.stderr)
+            continue
         except Exception as e:
             print(f"读取 {path} 失败: {e}")
             continue
@@ -516,11 +754,14 @@ def contrast_plot(csv_paths, show_dots=False):
                     print(f"输入错误: '{raw}' 不是有效数字，请重新输入。")
 
         default_legend = os.path.splitext(os.path.basename(path))[0]
+        if _first_prompt:
+            print("提示：图片标题/图例支持用 _ ^ {} 表示化学式（文件名不支持），例如 SO_4^{2-} 表示 SO₄²⁻")
+            _first_prompt = False
         legend_raw = input(f"请输入此曲线的图例名称 "
-                           f"(支持 LaTeX 格式，敲下 Enter 则采用默认名称「{default_legend}」): ").strip()
+                           f"（敲下 Enter 则采用默认名称「{default_legend}」): ").strip()
         if not legend_raw:
             legend_raw = default_legend
-        legend_name = _detect_and_wrap_latex(legend_raw)
+        legend_name = _format_sub_sup(legend_raw)
 
         seg = segments[choice]
         if len(seg) < 5:
@@ -533,16 +774,14 @@ def contrast_plot(csv_paths, show_dots=False):
         print("没有足够的数据可供绘图。")
         return
 
-    fig, ax = plt.subplots(figsize=(12, 7))
+    fig = go.Figure()
 
     all_t_min, all_t_max = float('inf'), float('-inf')
     all_e_min, all_e_max = float('inf'), float('-inf')
 
-    legend_handles = []
-
     for i, (name, t_seg, e_seg) in enumerate(selected_data):
         color = _CONTRAST_COLORS[i % len(_CONTRAST_COLORS)]
-        marker = _MARKERS[i % len(_MARKERS)]
+        marker = _MARKER_MAP.get(_MARKERS[i % len(_MARKERS)], 'circle')
 
         if len(e_seg) < 5:
             continue
@@ -554,55 +793,80 @@ def contrast_plot(csv_paths, show_dots=False):
         e_smooth = savgol_filter(e_seg, window_length=5, polyorder=2)
 
         if show_dots:
-            ax.plot(t_seg, e_seg, linestyle='None', marker=marker,
-                    color=color, markersize=3, markeredgewidth=0.5,
-                    alpha=0.8)
-            ax.plot(t_seg, e_smooth, '-', color=color, linewidth=1.0)
-            handle = Line2D([0], [0], color=color, marker=marker,
-                            markersize=5, linestyle='-', linewidth=1.0,
-                            label=name)
+            fig.add_trace(go.Scatter(
+                x=t_seg, y=e_seg, mode='markers',
+                marker=dict(color=color, symbol=marker, size=4,
+                            line=dict(width=0.5, color=color)),
+                opacity=0.8, showlegend=False,
+            ))
+            fig.add_trace(go.Scatter(
+                x=t_seg, y=e_smooth, mode='lines',
+                line=dict(color=color, width=2.5),
+                name=name, showlegend=True,
+            ))
         else:
-            ax.plot(t_seg, e_smooth, '-', color=color, linewidth=1.0,
-                    label=name)
-
-        if show_dots:
-            legend_handles.append(handle)
+            fig.add_trace(go.Scatter(
+                x=t_seg, y=e_smooth, mode='lines',
+                line=dict(color=color, width=2.5),
+                name=name, showlegend=True,
+            ))
 
         all_t_min = min(all_t_min, t_seg.min())
         all_t_max = max(all_t_max, t_seg.max())
         all_e_min = min(all_e_min, e_seg.min(), e_smooth.min())
         all_e_max = max(all_e_max, e_seg.max(), e_smooth.max())
 
-    ax.set_xlim(all_t_min - 5,
-                all_t_max + max(15, (all_t_max - all_t_min) * 0.05))
-    ax.set_ylim(all_e_min - (all_e_max - all_e_min) * 0.08,
-                all_e_max + (all_e_max - all_e_min) * 0.08)
+    x_margin = max(35, (all_t_max - all_t_min) * 0.12)
+    e_pad = (all_e_max - all_e_min) * 0.08
 
-    ax.set_xlabel('$t$ / s')
-    ax.set_ylabel('$E$ / mV')
+    # Closed black axis box
+    _ax_line = dict(showline=True, linewidth=1.25, linecolor='black',
+                    mirror=True, ticks='inside')
+    _ax_title = dict(size=15)
 
-    if show_dots:
-        ax.legend(handles=legend_handles, loc='upper right', framealpha=0.9)
-    else:
-        ax.legend(loc='upper right', framealpha=0.9)
+    fig.update_xaxes(range=[all_t_min - 5, all_t_max + x_margin], **_ax_line)
+    fig.update_yaxes(range=[all_e_min - e_pad, all_e_max + e_pad], **_ax_line)
 
     default_title = "Contrast Overlay"
-    title_raw = input(f"请输入图片标题（支持 LaTeX 格式，敲下 Enter 则采用默认标题「{default_title}」): ").strip()
+    title_raw = input(f"请输入图片标题（敲下 Enter 则采用默认标题「{default_title}」): ").strip()
     if not title_raw:
         title_raw = default_title
-    plt.title(_detect_and_wrap_latex(title_raw))
 
-    fig.tight_layout()
+    fig.update_layout(
+        title=dict(text=_format_sub_sup(title_raw),
+                   font=dict(family=_SANS_FONT, size=18), x=0.5, xanchor='center',
+                   y=0.94, yanchor='bottom'),
+        font=dict(family=_SANS_FONT, size=13),
+        xaxis=dict(title=dict(text="<i>t</i> / s",
+                              font=dict(family=_SANS_FONT, **_ax_title),
+                              standoff=5),
+                   tickfont=dict(family=_SANS_FONT, size=13)),
+        yaxis=dict(title=dict(text="<i>E</i> / mV",
+                              font=dict(family=_SANS_FONT, **_ax_title),
+                              standoff=2),
+                   tickfont=dict(family=_SANS_FONT, size=13)),
+        legend=dict(x=0.94, y=0.97, xanchor='right', yanchor='top',
+                    bgcolor='rgba(255,255,255,0.2)',
+                    bordercolor='black', borderwidth=1),
+        template='plotly_white',
+        width=600, height=600,
+        margin=dict(l=70, r=20, t=40, b=50),
+    )
 
-    default_filename = os.path.splitext(os.path.basename(csv_paths[0]))[0] + '_contrast.png'
-    filename = input(f"请输入保存文件名（敲下 Enter 则采用默认「{default_filename}」): ").strip()
-    if not filename:
-        filename = default_filename
+    while True:
+        filename = input("请输入保存文件名: ").strip()
+        if filename:
+            break
+        print("名称不能为空，请重新输入。")
     if not filename.lower().endswith('.png'):
         filename += '.png'
-    plt.savefig(filename, dpi=300)
-    print(f"\n对比图已保存至: {filename}")
-    plt.close(fig)
+    filename = _safe_save_path(filename)
+    try:
+        fig.write_image(filename, scale=3)
+        print(f"\n对比图已保存至: {filename}")
+    except Exception as e:
+        print(f"保存图像失败: {e}\n"
+              "请确认已安装 kaleido: pip install kaleido", file=sys.stderr)
 
 
 EPILOG = """
@@ -727,8 +991,13 @@ def main():
             csv_set = set(os.path.realpath(p) for p in all_csvs)
             for path in args.extract_contrast:
                 if os.path.isdir(path):
+                    try:
+                        _dir_entries = os.listdir(path)
+                    except FileNotFoundError:
+                        print(f"文件夹不存在: {path}。请确保文件夹存在，并且处于正确的路径中。", file=sys.stderr)
+                        continue
                     existing = sorted([
-                        os.path.join(path, f) for f in os.listdir(path)
+                        os.path.join(path, f) for f in _dir_entries
                         if f.endswith('.csv')
                     ])
                     for ecsv in existing:
@@ -747,10 +1016,48 @@ def main():
                 contrast_plot(all_csvs, show_dots=show_dots)
     elif args.contrast:
         show_dots = args.dotted
-        if len(args.contrast) < 2:
-            print("对比模式需要至少 2 个 CSV 文件。")
+        all_csvs = []
+        csv_set = set()
+
+        def _collect_csv(p):
+            if os.path.isdir(p):
+                try:
+                    _entries = os.listdir(p)
+                except FileNotFoundError:
+                    print(f"文件夹不存在: {p}。请确保文件夹存在，并且处于正确的路径中。", file=sys.stderr)
+                    return
+                for f in sorted(_entries):
+                    fp = os.path.join(p, f)
+                    if os.path.isfile(fp):
+                        _collect_csv(fp)
+                return
+            if not os.path.exists(p):
+                print(f"文件不存在: {p}。请确保文件存在，并且处于正确的路径中。", file=sys.stderr)
+                return
+            if p.endswith('.csv'):
+                real = os.path.realpath(p)
+                if real not in csv_set:
+                    all_csvs.append(p)
+                    csv_set.add(real)
+            elif p.endswith('.dat'):
+                csv_path = p[:-4] + '.csv'
+                if os.path.exists(csv_path):
+                    real = os.path.realpath(csv_path)
+                    if real not in csv_set:
+                        all_csvs.append(csv_path)
+                        csv_set.add(real)
+                else:
+                    print(f"{p} 是 .dat 文件，请先通过 -e 将其转换为 CSV 格式。")
+            else:
+                print(f"不支持的文件类型: {p}")
+
+        for p in args.contrast:
+            _collect_csv(p)
+
+        if len(all_csvs) < 2:
+            print("可供对比的 CSV 文件不足 2 个，无法绘制对比图。")
         else:
-            contrast_plot(args.contrast, show_dots=show_dots)
+            contrast_plot(all_csvs, show_dots=show_dots)
     else:
         parser.print_help()
 
