@@ -287,10 +287,13 @@ def plot_csv(paths):
     # 自动检测系统中可用的中文字体，兼容 Windows / macOS / Linux
     songti_fonts = _get_songti_fonts()
     heiti_fonts = _get_heiti_fonts()
-    # 全局默认 sans-serif：拉丁字符用 Arial，中文用黑体
+    # sans-serif：英文 Arial，中文黑体 — 用于标题、坐标轴、图例、刻度
     plt.rcParams['font.sans-serif'] = ['Arial'] + heiti_fonts + ['sans-serif']
+    # serif：英文 Times New Roman，中文宋体 — 用于底部说明文字
+    plt.rcParams['font.serif'] = ['Times New Roman'] + songti_fonts + ['serif']
     plt.rcParams['font.family'] = 'sans-serif'
     plt.rcParams['axes.unicode_minus'] = False
+    plt.rcParams['mathtext.fontset'] = 'dejavusans'
 
     for path in paths:
         if not path.endswith('.csv'):
@@ -380,19 +383,24 @@ def plot_csv(paths):
 
                 # 在投影线横轴下方写字（去掉s，放到横轴下面）
                 ax1.text(t_jump, -0.015, f'{t_jump:.1f}', color='black', transform=ax1.get_xaxis_transform(),
-                         ha='center', va='top', rotation=90, fontsize=10, fontfamily='Arial', clip_on=False)
+                         ha='center', va='top', rotation=90, fontsize=10, clip_on=False)
 
             last_t = t_seg[-1]
             last_E = e_smooth[-1]
 
-        ax1.set_xlabel('$t$ / s', fontname='Arial')
-        ax1.set_ylabel('$E$ / mV', color='b', fontname='Arial')
-        ax2.set_ylabel('d$E$/d$t$ / mV$\cdot$s$^{-1}$', color='r', fontname='Arial')
+        ax1.set_xlabel('$t$ / s')
+        ax1.set_ylabel('$E$ / mV', color='b')
+        ax2.set_ylabel('d$E$/d$t$ / mV$\cdot$s$^{-1}$', color='r')
 
         ax1.tick_params(axis='y', labelcolor='b')
         ax2.tick_params(axis='y', labelcolor='r')
 
-        plt.title(f"Coulomb Titration Curve ({os.path.basename(path)})", fontfamily=['Arial'] + heiti_fonts)
+        default_title = f"Coulomb Titration Curve ({os.path.splitext(os.path.basename(path))[0]})"
+        title_raw = input(f"请输入图片标题（支持 LaTeX 格式，敲下 Enter 则采用默认标题「{default_title}」): ").strip()
+        if not title_raw:
+            title_raw = default_title
+        title_final = _detect_and_wrap_latex(title_raw)
+        plt.title(title_final)
 
         # 将突跃点间隔放在图像底部左侧，不分行
         if len(jump_points) > 1:
@@ -408,10 +416,20 @@ def plot_csv(paths):
             fig.tight_layout(rect=[0, bottom_margin, 1, 1])
 
             # 添加文字到整张图片的底部靠左，紧贴图形区域
-            fig.text(0.06, bottom_margin - 0.04, info_str, ha='left', va='bottom', fontsize=11,
-                 fontfamily=['Times New Roman'] + songti_fonts)
+            fig.text(0.06, bottom_margin - 0.04, info_str, ha='left', va='bottom',
+                     fontsize=11, fontfamily='serif')
         else:
             fig.tight_layout()
+
+        # 图例
+        if _prompt_yes_no("是否需要添加图例？(Y/n): "):
+            default_legend = os.path.splitext(os.path.basename(path))[0]
+            legend_raw = input(f"请输入图例名称（支持 LaTeX 格式，敲下 Enter 则采用默认名称「{default_legend}」): ").strip()
+            if not legend_raw:
+                legend_raw = default_legend
+            legend_name = _detect_and_wrap_latex(legend_raw)
+            legend_handle = Line2D([0], [0], color='b', linestyle='-', linewidth=1.5, label=legend_name)
+            ax1.legend(handles=[legend_handle], loc='upper right', framealpha=0.9)
 
         png_path = os.path.splitext(path)[0] + '.png'
         plt.savefig(png_path, dpi=300)
@@ -435,8 +453,10 @@ def contrast_plot(csv_paths, show_dots=False):
     songti_fonts = _get_songti_fonts()
     heiti_fonts = _get_heiti_fonts()
     plt.rcParams['font.sans-serif'] = ['Arial'] + heiti_fonts + ['sans-serif']
+    plt.rcParams['font.serif'] = ['Times New Roman'] + songti_fonts + ['serif']
     plt.rcParams['font.family'] = 'sans-serif'
     plt.rcParams['axes.unicode_minus'] = False
+    plt.rcParams['mathtext.fontset'] = 'dejavusans'
 
     selected_data = []
 
@@ -477,10 +497,11 @@ def contrast_plot(csv_paths, show_dots=False):
                 except ValueError:
                     print(f"输入错误: '{raw}' 不是有效数字，请重新输入。")
 
-        legend_raw = input("请输入此曲线的图例名称 "
-                           "(支持普通文本或LaTeX格式，敲下 Enter 则直接使用 CSV 文件名): ").strip()
+        default_legend = os.path.splitext(os.path.basename(path))[0]
+        legend_raw = input(f"请输入此曲线的图例名称 "
+                           f"(支持 LaTeX 格式，敲下 Enter 则采用默认名称「{default_legend}」): ").strip()
         if not legend_raw:
-            legend_raw = os.path.basename(path)
+            legend_raw = default_legend
         legend_name = _detect_and_wrap_latex(legend_raw)
 
         seg = segments[choice]
@@ -541,8 +562,11 @@ def contrast_plot(csv_paths, show_dots=False):
     else:
         ax.legend(loc='upper right', framealpha=0.9)
 
-    plt.title("Contrast Overlay",
-              fontfamily=['Arial'] + heiti_fonts)
+    default_title = "Contrast Overlay"
+    title_raw = input(f"请输入图片标题（支持 LaTeX 格式，敲下 Enter 则采用默认标题「{default_title}」): ").strip()
+    if not title_raw:
+        title_raw = default_title
+    plt.title(_detect_and_wrap_latex(title_raw))
 
     fig.tight_layout()
 
