@@ -8,6 +8,7 @@ import time
 import threading
 import urllib.request
 import argparse
+import warnings
 
 try:
     from importlib.metadata import version as _get_version
@@ -27,31 +28,37 @@ except ImportError:
     HAS_LIBS = False
 
 def _get_songti_fonts():
-    """Return available Chinese 宋体 (Song/serif) fonts on the current system."""
-    candidates = [
-        # Windows
-        'SimSun', 'FangSong', 'KaiTi',
-        # macOS
-        'Songti SC', 'STSong', 'STFangsong',
-        # Linux
-        'Noto Serif CJK SC', 'AR PL UMing CN', 'AR PL UKai CN',
-    ]
+    """Return available Chinese 宋体 (Song/serif) font name for the current system."""
+    if sys.platform == 'darwin':
+        candidates = ['Songti SC', 'STSong']
+    elif sys.platform == 'win32':
+        candidates = ['SimSun']
+    else:
+        candidates = ['Noto Serif CJK SC', 'AR PL UMing CN']
+
     available = {f.name for f in fm.fontManager.ttflist}
-    return [name for name in candidates if name in available]
+    found = [name for name in candidates if name in available]
+    if not found:
+        print("警告：未检测到系统中文字体（宋体），底部说明文字中的中文可能无法正常显示。",
+              file=sys.stderr)
+    return found
 
 
 def _get_heiti_fonts():
-    """Return available Chinese 黑体 (Hei/sans-serif) fonts on the current system."""
-    candidates = [
-        # Windows
-        'SimHei', 'Microsoft YaHei',
-        # macOS
-        'Heiti TC', 'STHeiti', 'PingFang HK',
-        # Linux
-        'Noto Sans CJK SC', 'WenQuanYi Micro Hei', 'WenQuanYi Zen Hei',
-    ]
+    """Return available Chinese 黑体 (Hei/sans-serif) font name for the current system."""
+    if sys.platform == 'darwin':
+        candidates = ['PingFang SC', 'PingFang HK', 'PingFang TC']
+    elif sys.platform == 'win32':
+        candidates = ['Microsoft YaHei']
+    else:
+        candidates = ['Noto Sans CJK SC', 'WenQuanYi Micro Hei']
+
     available = {f.name for f in fm.fontManager.ttflist}
-    return [name for name in candidates if name in available]
+    found = [name for name in candidates if name in available]
+    if not found:
+        print("警告：未检测到系统中文字体（黑体），中文可能无法正常显示。",
+              file=sys.stderr)
+    return found
 
 # 30+ distinct colors for contrast overlay plots
 _CONTRAST_COLORS = [
@@ -281,8 +288,10 @@ def combine(csv_paths, out_filename=None):
 
 def plot_csv(paths):
     if not HAS_LIBS:
-        print("缺少绘图需要的 numpy, scipy, matplotlib 库，不能绘图。由于您当前环境中可能未安装，请使用如 pip install numpy scipy matplotlib 安装。")
+        print("缺少绘图需要的 numpy, scipy, matplotlib 库，不能绘图。由于您当前环境中可能未安装，请使用 pip install numpy scipy matplotlib 安装。")
         return
+
+    warnings.filterwarnings('ignore', message='Glyph.*missing from font')
 
     # 自动检测系统中可用的中文字体，兼容 Windows / macOS / Linux
     songti_fonts = _get_songti_fonts()
@@ -357,6 +366,13 @@ def plot_csv(paths):
 
             # 按照0.1s进行插值并求导
             if len(t_seg) > 1 and t_seg[-1] > t_seg[0]:
+                if len(np.unique(t_seg)) != len(t_seg):
+                    print(f"  - 数据错误：第 {i+1} 段曲线的时间列中存在重复值"
+                          f"（同一时间对应多个电位数据），无法进行插值求导，"
+                          f"已跳过该段的一阶导数计算。")
+                    last_t = t_seg[-1]
+                    last_E = e_smooth[-1]
+                    continue
                 f_interp = interp1d(t_seg, e_smooth, kind='cubic')
                 t_interp = np.arange(t_seg[0], t_seg[-1]+0.001, 0.1)
 
@@ -450,6 +466,8 @@ def contrast_plot(csv_paths, show_dots=False):
               "请使用如 pip install numpy scipy matplotlib 安装。")
         return
 
+    warnings.filterwarnings('ignore', message='Glyph.*missing from font')
+
     songti_fonts = _get_songti_fonts()
     heiti_fonts = _get_heiti_fonts()
     plt.rcParams['font.sans-serif'] = ['Arial'] + heiti_fonts + ['sans-serif']
@@ -508,7 +526,8 @@ def contrast_plot(csv_paths, show_dots=False):
         if len(seg) < 5:
             print(f"  - 警告：第 {choice+1} 段曲线数据点不足5个，跳过。")
             continue
-        selected_data.append((legend_name, seg[:, 0], seg[:, 1]))
+        t_shifted = seg[:, 0] - seg[:, 0].min()
+        selected_data.append((legend_name, t_shifted, seg[:, 1]))
 
     if len(selected_data) < 1:
         print("没有足够的数据可供绘图。")
@@ -527,6 +546,11 @@ def contrast_plot(csv_paths, show_dots=False):
 
         if len(e_seg) < 5:
             continue
+
+        if len(np.unique(t_seg)) != len(t_seg):
+            print(f"  - 警告：{name} 的时间列中存在重复值"
+                  f"（同一时间对应多个电位数据），曲线可能显示异常。")
+
         e_smooth = savgol_filter(e_seg, window_length=5, polyorder=2)
 
         if show_dots:
@@ -570,10 +594,14 @@ def contrast_plot(csv_paths, show_dots=False):
 
     fig.tight_layout()
 
-    base = os.path.splitext(csv_paths[0])[0]
-    png_path = base + '_contrast.png'
-    plt.savefig(png_path, dpi=300)
-    print(f"\n对比图已保存至: {png_path}")
+    default_filename = os.path.splitext(os.path.basename(csv_paths[0]))[0] + '_contrast.png'
+    filename = input(f"请输入保存文件名（敲下 Enter 则采用默认「{default_filename}」): ").strip()
+    if not filename:
+        filename = default_filename
+    if not filename.lower().endswith('.png'):
+        filename += '.png'
+    plt.savefig(filename, dpi=300)
+    print(f"\n对比图已保存至: {filename}")
     plt.close(fig)
 
 

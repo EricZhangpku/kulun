@@ -4,7 +4,7 @@
 [![Python](https://img.shields.io/pypi/pyversions/kulun)](https://pypi.org/project/kulun/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-> **v2.1.0 已发布** — 修正了 LaTeX 字体与正常字体的兼容性问题，按照科研绘图标准优化了中英文字体配置，为 `-p` 方法加入了可自定义图例，绘图标题现已支持自定义与 LaTeX 格式，并修复了若干 bug。（v2.0.0 版本）新增多曲线对比叠加绘图（`-t` / `-et`）、更新自动检测提醒、文件夹智能识别等多项功能。详见下方 [命令详解](#命令详解) 与 [GitHub Releases](https://github.com/EricZhangpku/kulun/releases)。
+> **v2.1.1 已发布** — 修正了 LaTeX 字体与正常字体的兼容性问题，按照科研绘图标准优化了中英文字体配置，为 `-p` 方法加入了可自定义图例，绘图标题现已支持自定义与 LaTeX 格式，并修复了若干 bug。（v2.0.0 版本）新增多曲线对比叠加绘图（`-t` / `-et`）、更新自动检测提醒、文件夹智能识别等多项功能。详见下方 [命令详解](#命令详解) 与 [GitHub Releases](https://github.com/EricZhangpku/kulun/releases)。
 
 `kulun` 是一个用 Python 编写的命令行工具，专门用于提取、合并并绘制由 *北京大学化学与分子工程学院定量分析化学实验教学组* 开发的库仑滴定软件所生成的 `.dat` 数据文件。支持滴定曲线及一阶导数分析、多曲线对比叠加、突跃点自动标注，启动时自动检测 PyPI 新版本并提醒更新。
 
@@ -43,7 +43,7 @@ pip install kulun
 kulun --version
 ```
 
-如果输出了版本号（如 `kulun 2.0.0`），说明安装成功。
+如果输出了版本号（如 `kulun 2.1.1`），说明安装成功。
 
 > *如果你是第一次接触终端*——
 > - **Windows**: 按 `Win(⊞) + R`，输入 "cmd" 回车。
@@ -200,6 +200,7 @@ kulun -td run1.csv run2.csv run3.csv
 - 可选的数据散点（`-d`），每条曲线使用不同的标记形状
 - 右上角图例：支持普通文本与 LaTeX 格式（自动识别）
 - 可自定义的图片标题（支持 LaTeX 格式，敲下 Enter 采用默认标题）
+- 交互式询问最终文件命名
 
 **交互流程：** 程序会先识别每个 CSV 中的平行曲线数量，若超过 1 条则让用户选择；随后询问每条曲线的图例名称（支持 LaTeX 格式，敲下 Enter 则采用 CSV 文件名）；最后询问图片标题（支持 LaTeX 格式，敲下 Enter 则采用默认标题「Contrast Overlay」）。
 
