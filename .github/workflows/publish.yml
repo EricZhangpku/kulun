@@ -1,0 +1,57 @@
+name: Publish to PyPI
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write      # for creating tag + release
+      id-token: write      # for PyPI trusted publishing
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Extract version from setup.py
+        id: version
+        run: |
+          VERSION=$(python3 setup.py --version)
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Check if this version is already published
+        id: check
+        run: |
+          TAG="v${{ steps.version.outputs.version }}"
+          if git rev-parse "$TAG" >/dev/null 2>&1; then
+            echo "Tag $TAG already exists — nothing to publish."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "New version detected: $TAG"
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create and push tag
+        if: steps.check.outputs.skip == 'false'
+        run: |
+          git tag "v${{ steps.version.outputs.version }}"
+          git push origin "v${{ steps.version.outputs.version }}"
+
+      - name: Create GitHub Release
+        if: steps.check.outputs.skip == 'false'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.version.outputs.version }}
+          name: v${{ steps.version.outputs.version }}
+          generate_release_notes: true
+
+      - name: Build package
+        if: steps.check.outputs.skip == 'false'
+        run: |
+          python3 -m pip install --upgrade build
+          python3 -m build
+
+      - name: Publish to PyPI
+        if: steps.check.outputs.skip == 'false'
+        uses: pypa/gh-action-pypi-publish@release/v1
