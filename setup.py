@@ -8,7 +8,7 @@ if os.path.exists("README.md"):
 
 setup(
     name="kulun",
-    version="2.0.0",
+    version="2.0.1",
     license="MIT",
     author="Jiahang Zhang",
     author_email="2062605586@qq.com",

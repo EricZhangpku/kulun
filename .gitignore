@@ -18,3 +18,6 @@ Thumbs.db
 
 # 测试样例
 test_*.py
+
+# Release notes（仅本地，不上传仓库）
+RELEASE_*.md

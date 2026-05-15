@@ -4,7 +4,7 @@
 [![Python](https://img.shields.io/pypi/pyversions/kulun)](https://pypi.org/project/kulun/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-> **v2.0.0 已发布** — 新增多曲线对比叠加绘图（`-t` / `-et`）、更新自动检测提醒、文件夹智能识别等多项功能。详见下方 [命令详解](#命令详解) 与 [GitHub Releases](https://github.com/EricZhangpku/kulun/releases)。
+> **v2.0.1 已发布** — 新增多曲线对比叠加绘图（`-t` / `-et`）、更新自动检测提醒、文件夹智能识别等多项功能。详见下方 [命令详解](#命令详解) 与 [GitHub Releases](https://github.com/EricZhangpku/kulun/releases)。
 
 `kulun` 是一个用 Python 编写的命令行工具，专门用于提取、合并并绘制由 *北京大学化学与分子工程学院定量分析化学实验教学组* 开发的库仑滴定软件所生成的 `.dat` 数据文件。支持滴定曲线及一阶导数分析、多曲线对比叠加、突跃点自动标注，启动时自动检测 PyPI 新版本并提醒更新。
 
@@ -275,3 +275,7 @@ pip install -e .
 ## 许可证
 
 MIT License · [EricZhangpku](https://github.com/EricZhangpku)
+
+---
+
+[Full documentation on GitHub](https://github.com/EricZhangpku/kulun)
