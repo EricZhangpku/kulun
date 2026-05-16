@@ -182,6 +182,21 @@ def _prompt_yes_no(prompt_text):
         print(f"输入错误: '{answer}'，请输入 Y/y (是) 或 N/n (否)。")
 
 
+def _prompt_filepath(path, file_desc="文件"):
+    """Prompt for a correct path when *path* does not exist.
+
+    Returns (new_path, skipped).
+    """
+    print(f"{file_desc}不存在: {path}。", file=sys.stderr)
+    while True:
+        raw = input(f"请输入正确的{file_desc}路径（敲下 Enter 则跳过此文件）: ").strip()
+        if not raw:
+            return None, True
+        if os.path.exists(raw):
+            return raw, False
+        print(f"{file_desc}不存在: {raw}。", file=sys.stderr)
+
+
 def _safe_save_path(filepath):
     """Check *filepath* for existence; prompt to overwrite or rename.
 
@@ -308,12 +323,15 @@ def process_file_extract(file_path):
     out_path = _safe_save_path(file_path[:-4] + '.csv')
 
     csv_data = []
-    try:
-        f = open(file_path, 'r', encoding='utf-8', errors='replace')
-    except FileNotFoundError:
-        print(f"文件不存在: {file_path}。"
-              "请确保文件存在，并且处于正确的路径中。", file=sys.stderr)
-        return None
+    while True:
+        try:
+            f = open(file_path, 'r', encoding='utf-8', errors='replace')
+            break
+        except FileNotFoundError:
+            new_path, skipped = _prompt_filepath(file_path, "文件")
+            if skipped:
+                return None
+            file_path = new_path
     with f:
         for line in f:
             parts = line.strip().split()
@@ -340,8 +358,10 @@ def extract(paths, allow_dir=True):
     out_files = []
     for path in paths:
         if not os.path.exists(path):
-            print(f"文件/文件夹不存在: {path}。请确保文件/文件夹存在，并且处于正确的路径中。", file=sys.stderr)
-            continue
+            new_path, skipped = _prompt_filepath(path, "文件/文件夹")
+            if skipped:
+                continue
+            path = new_path
         if os.path.isdir(path):
             if not allow_dir:
                 print(f"已跳过文件夹 {path}（-ec 模式不支持处理整个文件夹）。")
@@ -389,13 +409,22 @@ def combine(csv_paths, out_filename=None):
                 print(f"不支持的文件类型: {path}")
             continue
         if not os.path.exists(path):
-            print(f"文件不存在: {path}。请确保文件存在，并且处于正确的路径中。", file=sys.stderr)
-            continue
+            new_path, skipped = _prompt_filepath(path, "CSV 文件")
+            if skipped:
+                continue
+            path = new_path
 
-        try:
-            f = open(path, 'r', encoding='utf-8')
-        except FileNotFoundError:
-            print(f"文件不存在: {path}。请确保文件存在，并且处于正确的路径中。", file=sys.stderr)
+        while True:
+            try:
+                f = open(path, 'r', encoding='utf-8')
+                break
+            except FileNotFoundError:
+                new_path, skipped = _prompt_filepath(path, "CSV 文件")
+                if skipped:
+                    f = None
+                    break
+                path = new_path
+        if f is None:
             continue
         with f:
             reader = csv.reader(f)
@@ -468,16 +497,25 @@ def plot_csv(paths):
                 print(f"不支持的文件类型: {path}")
             continue
         if not os.path.exists(path):
-            print(f"文件不存在: {path}。请确保文件存在，并且处于正确的路径中。", file=sys.stderr)
-            continue
+            new_path, skipped = _prompt_filepath(path, "CSV 文件")
+            if skipped:
+                continue
+            path = new_path
 
-        try:
-            data = np.loadtxt(path, delimiter=',', skiprows=1)
-        except FileNotFoundError:
-            print(f"文件不存在: {path}。请确保文件存在，并且处于正确的路径中。", file=sys.stderr)
-            continue
-        except Exception as e:
-            print(f"读取 {path} 失败: {e}")
+        data = None
+        while True:
+            try:
+                data = np.loadtxt(path, delimiter=',', skiprows=1)
+                break
+            except FileNotFoundError:
+                new_path, skipped = _prompt_filepath(path, "CSV 文件")
+                if skipped:
+                    break
+                path = new_path
+            except Exception as e:
+                print(f"读取 {path} 失败: {e}")
+                break
+        if data is None:
             continue
 
         if len(data) == 0:
@@ -520,6 +558,7 @@ def plot_csv(paths):
         )
 
         jump_points = []
+        ambiguous_segments = []
         last_t, last_E = None, None
 
         for i, segment_data in enumerate(segments):
@@ -632,6 +671,50 @@ def plot_csv(paths):
                     t_jump = t_interp[min_idx]
                     de_jump = de_dt[min_idx]
 
+                # 判断突跃是否明显（两个条件满足任一即存疑）
+                is_ambiguous = False
+                de_median = np.median(de_dt)
+                de_std = np.std(de_dt)
+                # 条件1：真突跃偏离基线不足 2σ → 信噪比太低
+                if de_std > 0 and abs(de_jump - de_median) / de_std < 2.0:
+                    is_ambiguous = True
+                # 条件2：15 s 以外存在竞争 trough，且导数值之比 < 1.3
+                if not is_ambiguous:
+                    for cand_idx2 in sorted_idx:
+                        if de_dt[cand_idx2] == de_jump and t_interp[cand_idx2] == t_jump:
+                            continue
+                        t_cand2 = t_interp[cand_idx2]
+                        if abs(t_cand2 - t_jump) <= 15:
+                            continue
+                        orig_idx2 = int(np.clip(
+                            np.searchsorted(t_seg, t_cand2), 1, len(t_seg) - 2))
+                        is_false2 = False
+                        if np.isclose(t_cand2, t_seg[orig_idx2]):
+                            for offset in (-1, 0, 1):
+                                oi2 = orig_idx2 + offset
+                                if oi2 < 1 or oi2 >= len(t_seg) - 1:
+                                    continue
+                                if not np.isclose(t_seg[oi2] - t_seg[oi2 - 1],
+                                                  t_seg[oi2 + 1] - t_seg[oi2]):
+                                    is_false2 = True
+                                    break
+                        else:
+                            for bi2 in (orig_idx2 - 1, orig_idx2):
+                                if bi2 < 1 or bi2 >= len(t_seg) - 1:
+                                    continue
+                                if not np.isclose(t_seg[bi2] - t_seg[bi2 - 1],
+                                                  t_seg[bi2 + 1] - t_seg[bi2]):
+                                    is_false2 = True
+                                    break
+                        if not is_false2:
+                            de_far = de_dt[cand_idx2]
+                            if de_far != 0 and abs(de_jump / de_far) < 1.3:
+                                is_ambiguous = True
+                            break
+
+                if is_ambiguous:
+                    ambiguous_segments.append(i + 1)
+
                 jump_points.append(t_jump)
 
                 if false_jump_points:
@@ -642,15 +725,18 @@ def plot_csv(paths):
                               f"dE/dt = {df:.1f} mV/s")
                     print(f"    已自动排除，采用真突跃点: t = {t_jump:.1f} s")
 
-                # 真突跃点标记（红色三角）
+                # 真突跃点标记（绿色三角，存疑时黄色三角）
+                _jump_color = '#e6ab02' if is_ambiguous else '#2ca02c'
+                _vline_color = '#e6ab02' if is_ambiguous else '#2ca02c'
+                _time_color = '#e6ab02' if is_ambiguous else '#2ca02c'
                 fig.add_trace(go.Scatter(
                     x=[t_jump], y=[de_jump], mode='markers',
-                    marker=dict(color='#d62728', symbol='triangle-up', size=8),
+                    marker=dict(color=_jump_color, symbol='triangle-up', size=8),
                     showlegend=False,
                 ), secondary_y=True)
 
-                # 灰色虚线投影到横轴
-                fig.add_vline(x=t_jump, line=dict(color='gray', dash='dash',
+                # 虚线投影到横轴
+                fig.add_vline(x=t_jump, line=dict(color=_vline_color, dash='dash',
                                                   width=1),
                               opacity=0.6)
 
@@ -658,7 +744,7 @@ def plot_csv(paths):
                 fig.add_annotation(
                     x=t_jump, y=-0.04, xref='x', yref='paper',
                     text=f'{t_jump:.1f}', showarrow=False,
-                    font=dict(size=13, color='black', family=_SANS_FONT),
+                    font=dict(size=13, color=_time_color, family=_SANS_FONT),
                     textangle=-90, yanchor='top',
                 )
 
@@ -748,6 +834,12 @@ def plot_csv(paths):
             for idx, interval in enumerate(intervals):
                 items.append(f"第{idx+1}次与第{idx+2}次: {interval:.1f} s")
             info_str = "（突跃点时间间隔）   " + "      ".join(items)
+            if ambiguous_segments:
+                nums = "、".join(str(n) for n in sorted(ambiguous_segments))
+                info_str += (
+                    f"<span style='color:#e6ab02'>"
+                    f"（第{nums}次滴定突跃不明显，仅供参考）</span>"
+                )
 
             fig.add_annotation(
                 x=0.01, y=0.03, xref='paper', yref='paper',
@@ -812,16 +904,25 @@ def contrast_plot(csv_paths, show_dots=False):
                 print(f"不支持的文件类型: {path}")
             continue
         if not os.path.exists(path):
-            print(f"文件不存在: {path}。请确保文件存在，并且处于正确的路径中。", file=sys.stderr)
-            continue
+            new_path, skipped = _prompt_filepath(path, "CSV 文件")
+            if skipped:
+                continue
+            path = new_path
 
-        try:
-            data = np.loadtxt(path, delimiter=',', skiprows=1)
-        except FileNotFoundError:
-            print(f"文件不存在: {path}。请确保文件存在，并且处于正确的路径中。", file=sys.stderr)
-            continue
-        except Exception as e:
-            print(f"读取 {path} 失败: {e}")
+        data = None
+        while True:
+            try:
+                data = np.loadtxt(path, delimiter=',', skiprows=1)
+                break
+            except FileNotFoundError:
+                new_path, skipped = _prompt_filepath(path, "CSV 文件")
+                if skipped:
+                    break
+                path = new_path
+            except Exception as e:
+                print(f"读取 {path} 失败: {e}")
+                break
+        if data is None:
             continue
 
         if len(data) == 0:
@@ -1088,10 +1189,17 @@ def main():
             csv_set = set(os.path.realpath(p) for p in all_csvs)
             for path in args.extract_contrast:
                 if os.path.isdir(path):
-                    try:
-                        _dir_entries = os.listdir(path)
-                    except FileNotFoundError:
-                        print(f"文件夹不存在: {path}。请确保文件夹存在，并且处于正确的路径中。", file=sys.stderr)
+                    while True:
+                        try:
+                            _dir_entries = os.listdir(path)
+                            break
+                        except FileNotFoundError:
+                            new_path, skipped = _prompt_filepath(path, "文件夹")
+                            if skipped:
+                                _dir_entries = None
+                                break
+                            path = new_path
+                    if _dir_entries is None:
                         continue
                     existing = sorted([
                         os.path.join(path, f) for f in _dir_entries
@@ -1121,7 +1229,9 @@ def main():
                 try:
                     _entries = os.listdir(p)
                 except FileNotFoundError:
-                    print(f"文件夹不存在: {p}。请确保文件夹存在，并且处于正确的路径中。", file=sys.stderr)
+                    new_path, skipped = _prompt_filepath(p, "文件夹")
+                    if not skipped:
+                        _collect_csv(new_path)
                     return
                 for f in sorted(_entries):
                     fp = os.path.join(p, f)
@@ -1129,7 +1239,9 @@ def main():
                         _collect_csv(fp)
                 return
             if not os.path.exists(p):
-                print(f"文件不存在: {p}。请确保文件存在，并且处于正确的路径中。", file=sys.stderr)
+                new_path, skipped = _prompt_filepath(p, "文件")
+                if not skipped:
+                    _collect_csv(new_path)
                 return
             if p.endswith('.csv'):
                 real = os.path.realpath(p)
