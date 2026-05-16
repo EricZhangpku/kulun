@@ -748,6 +748,24 @@ def plot_csv(paths):
                     textangle=-90, yanchor='top',
                 )
 
+                # 垂直线与拟合曲线的交点标记（电位值）
+                e_at_jump = float(f_interp(t_jump))
+                fig.add_trace(go.Scatter(
+                    x=[t_jump], y=[e_at_jump], mode='markers',
+                    marker=dict(color=_jump_color, symbol='x', size=8),
+                    showlegend=False,
+                ), secondary_y=False)
+
+                fig.add_annotation(
+                    x=t_jump, y=e_at_jump, xref='x', yref='y',
+                    text=f'{e_at_jump:.1f} mV', showarrow=True,
+                    arrowhead=2, arrowcolor=_jump_color, arrowwidth=1.5,
+                    ax=55, ay=45,
+                    font=dict(color=_jump_color, size=13, family=_SANS_FONT),
+                    bgcolor='rgba(255,255,255,0.2)',
+                    borderpad=3,
+                )
+
                 # 假突跃标记（橙色空心圆圈 + 文字说明）
                 for tf, df in false_jump_points:
                     fig.add_trace(go.Scatter(
@@ -764,7 +782,7 @@ def plot_csv(paths):
                         ax=25, ay=-35,
                         font=dict(color='#cc7000', size=11,
                                   family=_SANS_FONT),
-                        bgcolor='rgba(255,255,255,0.85)',
+                        bgcolor='rgba(255,255,255,0.2)',
                         borderpad=3,
                     )
 
