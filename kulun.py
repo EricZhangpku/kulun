@@ -19,7 +19,7 @@ try:
     import numpy as np
     import plotly.graph_objects as go
     from plotly.subplots import make_subplots
-    from scipy.signal import savgol_filter
+    from scipy.signal import savgol_filter, argrelextrema
     from scipy.interpolate import interp1d
     HAS_LIBS = True
 except ImportError:
@@ -186,15 +186,17 @@ def _safe_save_path(filepath):
     """Check *filepath* for existence; prompt to overwrite or rename.
 
     Scans for existing numbered siblings and suggests the next free
-    number as the default.
+    number as the default.  Loops until a non-conflicting resolution
+    is reached — every user-supplied name goes through the same
+    replace-or-rename prompt.
     """
     if not os.path.exists(filepath):
         return filepath
 
-    directory = os.path.dirname(filepath)
+    directory = os.path.dirname(filepath) or '.'
     base, ext = os.path.splitext(os.path.basename(filepath))
 
-    # find all existing numbered versions
+    # collect existing numbered siblings for the *original* base name
     existing = []
     i = 1
     while True:
@@ -204,7 +206,7 @@ def _safe_save_path(filepath):
             i += 1
         else:
             break
-    next_num = i  # first free slot
+    next_num = i
 
     all_existing = [os.path.basename(filepath)] + existing
     existing_str = ", ".join(all_existing)
@@ -213,28 +215,44 @@ def _safe_save_path(filepath):
     if _prompt_yes_no(f"文件 {existing_str} 已存在，是否替换{replace_target}？(Y/n): "):
         return filepath
 
-    default_new = os.path.join(directory, f"{base}({next_num}){ext}")
-    raw = input(
-        f"请输入新文件名（敲下 Enter 则采用「{os.path.basename(default_new)}」）: "
-    ).strip()
-
-    if raw:
-        if not os.path.splitext(raw)[1]:
-            raw += ext
-        if not os.path.dirname(raw):
-            raw = os.path.join(directory, raw)
-        if not os.path.exists(raw):
-            return raw
-        # custom name also exists → auto-number it
-        u_base, u_ext = os.path.splitext(raw)
+    # loop: each iteration offers a numbered default and processes user input
+    current_base = base
+    current_ext = ext
+    while True:
+        # find first free numbered name for the current base
         j = 1
         while True:
-            u_candidate = f"{u_base}({j}){u_ext}"
-            if not os.path.exists(u_candidate):
-                return u_candidate
+            candidate = os.path.join(directory, f"{current_base}({j}){current_ext}")
+            if not os.path.exists(candidate):
+                break
             j += 1
+        default_name = candidate
 
-    return default_new
+        raw = input(
+            f"请输入新文件名（敲下 Enter 则采用"
+            f"「{os.path.basename(default_name)}」）: "
+        ).strip()
+
+        if not raw:
+            return default_name
+
+        if not os.path.splitext(raw)[1]:
+            raw += current_ext
+        if not os.path.dirname(raw):
+            raw = os.path.join(directory, raw)
+
+        if not os.path.exists(raw):
+            return raw
+
+        # user-supplied name exists → ask, then loop again if declined
+        if _prompt_yes_no(f"文件 {os.path.basename(raw)} 已存在，"
+                          f"是否替换 {os.path.basename(raw)}？(Y/n): "):
+            return raw
+
+        # prepare for next iteration based on the rejected name
+        current_base, current_ext = os.path.splitext(os.path.basename(raw))
+        if not current_ext:
+            current_ext = ext
 
 
 def _check_for_updates():
@@ -560,12 +578,71 @@ def plot_csv(paths):
                     opacity=0.9, showlegend=False,
                 ), secondary_y=True)
 
-                # 突跃点标记
-                min_idx = np.argmin(de_dt)
-                t_jump = t_interp[min_idx]
-                de_jump = de_dt[min_idx]
+                # 突跃点标记 —— 含假突跃判定
+                dt_seg = np.diff(t_seg)
+                # 找一阶导所有局部极小值，按导数值从小到大排序
+                local_min_idx = argrelextrema(de_dt, np.less, order=2)[0]
+                global_min_idx = np.argmin(de_dt)
+                if global_min_idx not in local_min_idx:
+                    local_min_idx = np.append(local_min_idx, global_min_idx)
+                sorted_idx = local_min_idx[np.argsort(de_dt[local_min_idx])]
+
+                false_jump_points = []
+                t_jump = None
+                de_jump = None
+
+                for cand_idx in sorted_idx:
+                    t_cand = t_interp[cand_idx]
+                    orig_idx = int(np.clip(
+                        np.searchsorted(t_seg, t_cand), 1, len(t_seg) - 2))
+                    is_false = False
+
+                    if np.isclose(t_cand, t_seg[orig_idx]):
+                        # 候选点落在散点上 → 检查该散点及其 ±1 相邻散点
+                        for offset in (-1, 0, 1):
+                            oi = orig_idx + offset
+                            if oi < 1 or oi >= len(t_seg) - 1:
+                                continue
+                            before = t_seg[oi] - t_seg[oi - 1]
+                            after = t_seg[oi + 1] - t_seg[oi]
+                            if not np.isclose(before, after):
+                                is_false = True
+                                break
+                    else:
+                        # 候选点落在两个散点之间 → 只检查这两个散点
+                        for bi in (orig_idx - 1, orig_idx):
+                            if bi < 1 or bi >= len(t_seg) - 1:
+                                continue
+                            before = t_seg[bi] - t_seg[bi - 1]
+                            after = t_seg[bi + 1] - t_seg[bi]
+                            if not np.isclose(before, after):
+                                is_false = True
+                                break
+
+                    if is_false:
+                        false_jump_points.append((t_cand, de_dt[cand_idx]))
+                        continue
+
+                    t_jump = t_cand
+                    de_jump = de_dt[cand_idx]
+                    break
+
+                if t_jump is None:
+                    min_idx = np.argmin(de_dt)
+                    t_jump = t_interp[min_idx]
+                    de_jump = de_dt[min_idx]
+
                 jump_points.append(t_jump)
 
+                if false_jump_points:
+                    print(f"  - 警告：第 {i+1} 段曲线检测到 {len(false_jump_points)} 处"
+                          f"假突跃（由测量时间间隔切换引起）：")
+                    for fi, (tf, df) in enumerate(false_jump_points):
+                        print(f"    假突跃 {fi+1}: t = {tf:.1f} s, "
+                              f"dE/dt = {df:.1f} mV/s")
+                    print(f"    已自动排除，采用真突跃点: t = {t_jump:.1f} s")
+
+                # 真突跃点标记（红色三角）
                 fig.add_trace(go.Scatter(
                     x=[t_jump], y=[de_jump], mode='markers',
                     marker=dict(color='#d62728', symbol='triangle-up', size=8),
@@ -584,6 +661,26 @@ def plot_csv(paths):
                     font=dict(size=13, color='black', family=_SANS_FONT),
                     textangle=-90, yanchor='top',
                 )
+
+                # 假突跃标记（橙色空心圆圈 + 文字说明）
+                for tf, df in false_jump_points:
+                    fig.add_trace(go.Scatter(
+                        x=[tf], y=[df], mode='markers',
+                        marker=dict(color='orange', symbol='circle-open',
+                                    size=10, line=dict(width=2)),
+                        showlegend=False,
+                    ), secondary_y=True)
+
+                    fig.add_annotation(
+                        x=tf, y=df, xref='x', yref='y2',
+                        text='假突跃', showarrow=True,
+                        arrowhead=2, arrowcolor='orange', arrowwidth=1.5,
+                        ax=25, ay=-35,
+                        font=dict(color='#cc7000', size=11,
+                                  family=_SANS_FONT),
+                        bgcolor='rgba(255,255,255,0.85)',
+                        borderpad=3,
+                    )
 
             last_t = t_seg[-1]
             last_E = e_smooth[-1]
