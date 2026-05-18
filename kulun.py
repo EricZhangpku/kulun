@@ -833,7 +833,7 @@ def plot_csv(paths):
 
                 fig.add_annotation(
                     x=t_jump, y=e_at_jump, xref='x', yref='y',
-                    text=f'{e_at_jump:.1f} mV', showarrow=True,
+                    text=f'{e_at_jump:.1f} mV ({de_jump:.4g} mV·s<sup>-1</sup>)', showarrow=True,
                     arrowhead=2, arrowcolor=_jump_color, arrowwidth=1.5,
                     ax=55, ay=45,
                     font=dict(color=_jump_color, size=13, family=_SANS_FONT),
