@@ -528,10 +528,85 @@ def plot_csv(paths):
         split_indices = np.where(diff > 100)[0] + 1
         segments = np.split(data, split_indices)
 
-        print(f"\n正在处理 {path} (共自动识别到 {len(segments)} 条平行曲线):")
+        print(f"\n正在处理 {path} (共自动识别到 {len(segments)} 条独立曲线):")
         print("提示：已采用 Savitzky-Golay 滤波方法：窗口点数 5，多项式阶数 2")
 
         n_curves = len(segments)
+
+        # —— 询问标题 ——
+        default_title = f"Coulomb Titration Curve ({os.path.splitext(os.path.basename(path))[0]})"
+        print("提示：图片标题/图例支持用 _ ^ {} 表示化学式（文件名不支持），例如 SO_4^{2-} 表示 SO₄²⁻")
+        title_raw = input(f"请输入图片标题（敲下 Enter 则采用默认标题「{default_title}」): ").strip()
+        if not title_raw:
+            title_raw = default_title
+        title_final = _format_sub_sup(title_raw)
+
+        # —— 询问图例 ——
+        add_legend = _prompt_yes_no("是否需要添加图例？(Y/n): ")
+
+        # —— 多色模式 ——
+        _COLOR_MAP = {1: '#1f77b4', 2: '#d95f02', 3: '#e377c2', 4: '#984ea3',
+                      5: '#17becf', 6: '#a6761d', 7: '#b82e8a', 8: '#7570b3'}
+
+        use_multi_color = False
+        color_assignment = None
+        legend_name = None
+        legend_entries = []  # [(color_id, formatted_name), ...] for multi-color legend
+
+        if n_curves >= 2:
+            use_multi_color = _prompt_yes_no("是否采用不同颜色标记不同的独立曲线？(Y/n): ")
+            if use_multi_color:
+                while True:
+                    raw = input(
+                        f"共检测到 {n_curves} 条独立曲线，"
+                        f"请输入曲线的颜色分配（如「1213」表示"
+                        f"\"只有第1、3条曲线颜色相同\"）："
+                    ).strip()
+                    if not raw.isdigit():
+                        print("输入非法，请重新输入。")
+                        continue
+                    if len(raw) != n_curves:
+                        print(f"一共有 {n_curves} 条独立曲线，请重新输入。")
+                        continue
+                    if any(int(c) > 8 for c in raw):
+                        print("最多可选8种颜色(1-8)，请重新输入。")
+                        continue
+                    color_assignment = [int(c) for c in raw]
+                    break
+
+                if add_legend:
+                    groups = {}
+                    for idx, c in enumerate(color_assignment):
+                        groups.setdefault(c, []).append(idx + 1)
+
+                    for color_id in sorted(groups.keys()):
+                        indices = groups[color_id]
+                        if len(indices) == 1:
+                            prompt_text = f"请输入曲线 {indices[0]} 的图例名称："
+                        else:
+                            nums = "、".join(str(i) for i in indices)
+                            prompt_text = f"请输入曲线 {nums} 的图例名称："
+                        while True:
+                            name_raw = input(prompt_text).strip()
+                            if name_raw:
+                                break
+                            print("输入不能为空。")
+                        legend_entries.append((color_id, _format_sub_sup(name_raw)))
+
+        # 单色模式下的图例名称
+        if add_legend and not use_multi_color:
+            default_legend = os.path.splitext(os.path.basename(path))[0]
+            legend_raw = input(f"请输入图例名称（敲下 Enter 则采用默认名称「{default_legend}」): ").strip()
+            if not legend_raw:
+                legend_raw = default_legend
+            legend_name = _format_sub_sup(legend_raw)
+
+        # 构建每条曲线的颜色列表
+        if use_multi_color:
+            curve_colors = [_COLOR_MAP[c] for c in color_assignment]
+        else:
+            curve_colors = ['#1f77b4'] * n_curves
+
         # n=1 → 1:1,  n≥2 → 2:1
         fig_width = 600 if n_curves == 1 else 1000
         fig_height = 600 if n_curves == 1 else 500
@@ -572,7 +647,7 @@ def plot_csv(paths):
             # 离散点（深蓝色小圆点）
             fig.add_trace(go.Scatter(
                 x=t_seg, y=e_seg, mode='markers',
-                marker=dict(color='#1f77b4', symbol='circle', size=4),
+                marker=dict(color=curve_colors[i], symbol='circle', size=4),
                 showlegend=False,
             ), secondary_y=False)
 
@@ -583,14 +658,14 @@ def plot_csv(paths):
             if i > 0 and last_t is not None:
                 fig.add_trace(go.Scatter(
                     x=[last_t, t_seg[0]], y=[last_E, e_smooth[0]],
-                    mode='lines', line=dict(color='#1f77b4', width=2.5),
+                    mode='lines', line=dict(color='#b3b3b3', width=2.5),
                     opacity=0.4, showlegend=False,
                 ), secondary_y=False)
 
             # 平滑曲线（2× 坐标轴线宽）
             fig.add_trace(go.Scatter(
                 x=t_seg, y=e_smooth, mode='lines',
-                line=dict(color='#1f77b4', width=2.5),
+                line=dict(color=curve_colors[i], width=2.5),
                 showlegend=False,
             ), secondary_y=False)
 
@@ -796,13 +871,6 @@ def plot_csv(paths):
             secondary_y=True, **_ax_line,
         )
 
-        default_title = f"Coulomb Titration Curve ({os.path.splitext(os.path.basename(path))[0]})"
-        print("提示：图片标题/图例支持用 _ ^ {} 表示化学式（文件名不支持），例如 SO_4^{2-} 表示 SO₄²⁻")
-        title_raw = input(f"请输入图片标题（敲下 Enter 则采用默认标题「{default_title}」): ").strip()
-        if not title_raw:
-            title_raw = default_title
-        title_final = _format_sub_sup(title_raw)
-
         _has_jump_info = len(jump_points) > 1
 
         fig.update_layout(
@@ -867,17 +935,20 @@ def plot_csv(paths):
             )
 
         # 图例（右上角，图内，不覆盖曲线）
-        if _prompt_yes_no("是否需要添加图例？(Y/n): "):
-            default_legend = os.path.splitext(os.path.basename(path))[0]
-            legend_raw = input(f"请输入图例名称（敲下 Enter 则采用默认名称「{default_legend}」): ").strip()
-            if not legend_raw:
-                legend_raw = default_legend
-            legend_name = _format_sub_sup(legend_raw)
-            fig.add_trace(go.Scatter(
-                x=[None], y=[None], mode='lines',
-                line=dict(color='#1f77b4', width=2.5),
-                name=legend_name, showlegend=True,
-            ), secondary_y=False)
+        if add_legend:
+            if use_multi_color:
+                for color_id, name in legend_entries:
+                    fig.add_trace(go.Scatter(
+                        x=[None], y=[None], mode='lines',
+                        line=dict(color=_COLOR_MAP[color_id], width=2.5),
+                        name=name, showlegend=True,
+                    ), secondary_y=False)
+            else:
+                fig.add_trace(go.Scatter(
+                    x=[None], y=[None], mode='lines',
+                    line=dict(color='#1f77b4', width=2.5),
+                    name=legend_name, showlegend=True,
+                ), secondary_y=False)
             # 横轴向右延长以容纳图例
             _x_range = fig.layout.xaxis.range
             if _x_range:
@@ -1016,8 +1087,10 @@ def contrast_plot(csv_paths, show_dots=False):
                 opacity=0.8, showlegend=False,
             ))
             fig.add_trace(go.Scatter(
-                x=t_seg, y=e_smooth, mode='lines',
+                x=t_seg, y=e_smooth, mode='lines+markers',
                 line=dict(color=color, width=2.5),
+                marker=dict(color=color, symbol=marker, size=4,
+                            line=dict(width=0.5, color=color)),
                 name=name, showlegend=True,
             ))
         else:
@@ -1144,7 +1217,7 @@ def main():
     )
     actions.add_argument(
         '-p', '--plot', nargs='+', metavar='CSV',
-        help="绘制 CSV 文件的滴定曲线与一阶导分析图，自动识别平行曲线并标注突跃点",
+        help="绘制 CSV 文件的滴定曲线与一阶导分析图，自动识别独立曲线并标注突跃点",
     )
     actions.add_argument(
         '-cp', '--combine-plot', nargs='+', metavar='CSV',

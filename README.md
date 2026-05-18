@@ -4,7 +4,7 @@
 [![Python](https://img.shields.io/pypi/pyversions/kulun)](https://pypi.org/project/kulun/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-> **v2.2.3 已发布** — 新增突跃点对应电位自动标注。v2.2.2 新增终点存疑自动判定（双标准：信噪比 + 竞争 trough）。v2.2.1 新增假突跃自动识别与排除。v2.2.0 重大更新：将底层绘图引擎从 matplotlib 迁移至 plotly，**彻底解决了中文字体在各操作系统上的兼容性问题**。详见下方 [命令详解](#命令详解) 与 [GitHub Releases](https://github.com/EricZhangpku/kulun/releases)。
+> **v2.2.4 已发布** — 新增平行曲线多色模式，支持自定义各曲线颜色与分组图例。v2.2.3 新增突跃点对应电位自动标注。v2.2.2 新增终点存疑自动判定。v2.2.1 新增假突跃自动识别与排除。v2.2.0 重大更新：迁移至 plotly 绘图引擎，彻底解决中文字体兼容性问题。详见 [GitHub Releases](https://github.com/EricZhangpku/kulun/releases)。
 
 `kulun` 是一个用 Python 编写的命令行工具，专门用于提取、合并并绘制由 *北京大学化学与分子工程学院定量分析化学实验教学组* 开发的库仑滴定软件所生成的 `.dat` 数据文件。支持滴定曲线及一阶导数分析、多曲线对比叠加、突跃点自动标注，启动时自动检测 PyPI 新版本并提醒更新。
 
@@ -43,7 +43,7 @@ pip install kulun
 kulun --version
 ```
 
-如果输出了版本号（如 `kulun 2.2.3`），说明安装成功。
+如果输出了版本号（如 `kulun 2.2.4`），说明安装成功。
 
 > *如果你是第一次接触终端*——
 > - **Windows**: 按 `Win(⊞) + R`，输入 "cmd" 回车。
@@ -135,29 +135,56 @@ kulun -ec run1.dat run2.dat run3.dat
 
 ### 4. 绘制科研图 `-p`
 
-> 对 CSV 数据绘图，自动识别平行滴定曲线、计算一阶导数、标注突跃点时间。
+> 对 CSV 数据绘图，自动识别平行滴定曲线、计算一阶导数、标注突跃点。
 
 ```bash
 kulun -p data.csv
 ```
 
-**交互流程：** 程序会先询问图片标题（支持 `_` `^` `{}` 表示化学式，例如 `SO_4^{2-}` 表示 SO₄²⁻，敲下 Enter 则采用默认标题），随后询问是否需要添加图例（Y/n），若添加图例则进一步询问图例名称。
+程序会依次询问图片标题、图例，识别到多条平行曲线时可选择**多色模式**（见下方色卡），自定义各曲线颜色。
 
-**输出图片包含：**
-- 蓝色曲线：原始数据散点 & Savitzky-Golay 平滑曲线
-- 红色曲线：一阶导数 d*E*/d*t*
-- 绿色三角（明确）或黄色三角（存疑）：突跃点（导数极值点），自动排除测量间隔切换引起的假突跃，并对存疑终点降级标记
-- 绿色/黄色叉号 + 箭头电位值（如「1234.5 mV」）：垂直线与拟合曲线的交点，字体大小与横轴时间标注一致
-- 橙色空心圆圈 + 箭头文字「假突跃」：被排除的伪极值点（仅在存在假突跃时显示）
-- 绿色/黄色虚线：突跃点在时间轴上的投影（颜色与三角形一致）
-- 图片底部：每条平行曲线的突跃时间间隔；若有存疑段则追加黄色文字说明
-- 可选：右上角图例
-- 物理量斜体、单位正体；全封闭坐标轴；突跃点标注与横轴标题自动避让
-- 图片横纵比自动适配曲线条数（1 条 1:1，多条 2:1）
+**输出图片包含：** 平滑曲线与原始散点、一阶导数曲线、突跃点标记（含电位值和时间间隔）。平行曲线间以灰线连接。排版自动适配曲线条数。
 
-> **假突跃自动排除：** 库仑滴定常在一开始和接近终点时采用不同的测量时间间隔（如 10 s → 1 s），切换处的一阶导容易出现伪极值。v2.2.1 起自动检测候选突跃点相邻散点的时间间隔是否一致，若不一致则判定为假突跃并顺延采用下一个符合条件的极值点。终端会打印假突跃的时间和导数值。
->
-> **终点存疑自动判定（v2.2.2）：** 排除假突跃后，对所得真突跃进行双标准可靠性评估——（1）信噪比：真突跃偏离导数基线不足 2σ；（2）竞争 trough：15 s 以外存在另一有效极值且导数值之比 < 1.3。满足任一条件则判定为存疑，三角形、投影线、时间标注均由绿色改为黄色，并在时间间隔说明末尾追加说明。
+> **智能判定：** 自动排除因测量时间间隔切换引起的假突跃。对真突跃做双重可靠性检查，满足任一条件则标为"存疑"（黄色）：
+> - 突跃偏离导数基线不足 2σ（信噪比低）
+> - 15 s 以外存在导数值与之接近（比值 < 1.3）的另一极值（竞争 trough）
+> 
+> 其余突跃点标记为绿色。
+
+**多色模式可选颜色（共 8 种）：**
+
+<table>
+  <tr align="center">
+    <td><code>1</code></td>
+    <td><code>2</code></td>
+    <td><code>3</code></td>
+    <td><code>4</code></td>
+    <td><code>5</code></td>
+    <td><code>6</code></td>
+    <td><code>7</code></td>
+    <td><code>8</code></td>
+  </tr>
+  <tr>
+    <td align="center"><img src="https://placehold.co/48x24/1f77b4/1f77b4.png" alt="#1f77b4" width="48" height="24"></td>
+    <td align="center"><img src="https://placehold.co/48x24/d95f02/d95f02.png" alt="#d95f02" width="48" height="24"></td>
+    <td align="center"><img src="https://placehold.co/48x24/e377c2/e377c2.png" alt="#e377c2" width="48" height="24"></td>
+    <td align="center"><img src="https://placehold.co/48x24/984ea3/984ea3.png" alt="#984ea3" width="48" height="24"></td>
+    <td align="center"><img src="https://placehold.co/48x24/17becf/17becf.png" alt="#17becf" width="48" height="24"></td>
+    <td align="center"><img src="https://placehold.co/48x24/a6761d/a6761d.png" alt="#a6761d" width="48" height="24"></td>
+    <td align="center"><img src="https://placehold.co/48x24/b82e8a/b82e8a.png" alt="#b82e8a" width="48" height="24"></td>
+    <td align="center"><img src="https://placehold.co/48x24/7570b3/7570b3.png" alt="#7570b3" width="48" height="24"></td>
+  </tr>
+  <tr align="center">
+    <td><sub>#1f77b4</sub></td>
+    <td><sub>#d95f02</sub></td>
+    <td><sub>#e377c2</sub></td>
+    <td><sub>#984ea3</sub></td>
+    <td><sub>#17becf</sub></td>
+    <td><sub>#a6761d</sub></td>
+    <td><sub>#b82e8a</sub></td>
+    <td><sub>#7570b3</sub></td>
+  </tr>
+</table>
 
 ---
 
@@ -191,28 +218,20 @@ kulun -p combined.csv                  # 绘图
 
 ### 7. 多曲线对比图 `-t`
 
-> 将多个 CSV（或含 dat 的混合路径）的滴定曲线叠加在同一张图中，自动拟合平滑曲线并以不同颜色区分，右上角附有图例。**支持直接传入文件夹**，自动识别其中的 CSV 和 DAT 文件（若 DAT 已有对应 CSV 则直接使用，否则提示先转换）。
+> 将多条 CSV 滴定曲线叠加在同一张图中对比，自动拟合平滑曲线并以不同颜色区分。**支持传入文件夹**，自动识别其中的 CSV/DAT 文件。
 
 ```bash
-# 仅显示拟合曲线
+# 传入分立的 CSV 文件
 kulun -t run1.csv run2.csv run3.csv
 
 # 传入文件夹或混合路径
 kulun -t ./data_folder/ run1.csv
 
-# 同时显示数据散点，不同曲线使用不同形状标记
+# 同时显示数据散点
 kulun -td run1.csv run2.csv run3.csv
 ```
 
 等价写法：`-tu` = `-t` + `-u`（仅曲线，默认行为），`-td` = `-t` + `-d`（显示数据散点）。
-
-**输出图片包含：**
-- 多条不同颜色的平滑拟合曲线
-- 可选的数据散点（`-d`），每条曲线使用不同的标记形状
-- 右上角图例
-- 全封闭坐标轴；物理量斜体、单位正体；1:1 正方尺寸
-
-**交互流程：** 程序会先识别每个 CSV 中的平行曲线数量，若超过 1 条则让用户选择；随后询问每条曲线的图例名称（支持 `_` `^` `{}` 表示化学式，敲下 Enter 则采用 CSV 文件名）；最后询问图片标题（敲下 Enter 则采用默认标题「Contrast Overlay」）。
 
 ---
 
@@ -224,7 +243,7 @@ kulun -td run1.csv run2.csv run3.csv
 # 从多个 .dat 文件一步生成对比图
 kulun -et run1.dat run2.dat run3.dat
 
-# 使用文件夹：自动提取所有 .dat，并询问是否包含已有的 .csv
+# 使用文件夹：自动提取所有 .dat，并询问是否考虑已有的 .csv
 kulun -et ./data_folder/
 
 # 含数据点版本
